@@ -1,0 +1,9 @@
+pre-commit:
+  commands:
+    rustfmt:
+      run: cargo fmt --all
+      stage_fixed: true
+
+    clippy:
+      run: cargo clippy --fix --allow-dirty --allow-staged --all-features -- -D warnings
+      stage_fixed: true
