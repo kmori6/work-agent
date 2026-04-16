@@ -1,9 +1,10 @@
 use crate::domain::error::tool_error::ToolError;
 use crate::domain::model::tool::ToolExecutionResult;
 use crate::domain::port::tool::Tool;
+use crate::infrastructure::util::path::{normalize_path, resolve_workspace_file_path};
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
 const DEFAULT_LINE_COUNT: usize = 200;
 const MAX_LINE_COUNT: usize = 400;
@@ -27,62 +28,6 @@ impl TextFileReadTool {
 
         Ok(Self { workspace_root })
     }
-
-    fn has_parent_traversal(path: &Path) -> bool {
-        path.components()
-            .any(|component| matches!(component, Component::ParentDir))
-    }
-
-    fn normalize_path(path: &Path) -> String {
-        let text = path.to_string_lossy().replace('\\', "/");
-        if text.is_empty() {
-            ".".to_string()
-        } else {
-            text
-        }
-    }
-
-    fn resolve_file_path(&self, path: &str) -> Result<PathBuf, ToolError> {
-        let path = path.trim();
-        if path.is_empty() {
-            return Err(ToolError::InvalidArguments(
-                "'path' must not be empty".into(),
-            ));
-        }
-
-        let path = Path::new(path);
-
-        if path.is_absolute() {
-            return Err(ToolError::InvalidArguments(
-                "'path' must be relative to the workspace root".into(),
-            ));
-        }
-
-        if Self::has_parent_traversal(path) {
-            return Err(ToolError::PermissionDenied(
-                "path traversal is not allowed in 'path'".into(),
-            ));
-        }
-
-        let resolved_path =
-            std::fs::canonicalize(self.workspace_root.join(path)).map_err(|err| {
-                ToolError::ExecutionFailed(format!("failed to resolve file path: {err}"))
-            })?;
-
-        if !resolved_path.starts_with(&self.workspace_root) {
-            return Err(ToolError::PermissionDenied(
-                "'path' resolved outside the workspace".into(),
-            ));
-        }
-
-        if !resolved_path.is_file() {
-            return Err(ToolError::InvalidArguments(
-                "'path' must point to a file".into(),
-            ));
-        }
-
-        Ok(resolved_path)
-    }
 }
 
 #[async_trait]
@@ -101,7 +46,7 @@ impl Tool for TextFileReadTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Workspace-relative path to the text file to read."
+                    "description": "Path to the text file to read. Relative paths are resolved from the workspace root. Absolute paths are allowed only if they stay inside the workspace."
                 },
                 "start_line": {
                     "type": "integer",
@@ -165,7 +110,7 @@ impl Tool for TextFileReadTool {
             None => DEFAULT_LINE_COUNT,
         };
 
-        let resolved_path = self.resolve_file_path(path)?;
+        let resolved_path = resolve_workspace_file_path(&self.workspace_root, path)?;
 
         let metadata = tokio::fs::metadata(&resolved_path).await.map_err(|err| {
             ToolError::ExecutionFailed(format!("failed to read file metadata: {err}"))
@@ -210,8 +155,8 @@ impl Tool for TextFileReadTool {
 
         let relative_path = resolved_path
             .strip_prefix(&self.workspace_root)
-            .map(Self::normalize_path)
-            .unwrap_or_else(|_| Self::normalize_path(&resolved_path));
+            .map(normalize_path)
+            .unwrap_or_else(|_| normalize_path(&resolved_path));
 
         let returned_lines = visible_lines.len();
         let end_line = if returned_lines == 0 {

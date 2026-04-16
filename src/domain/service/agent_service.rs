@@ -6,7 +6,7 @@ use crate::domain::service::tool_service::ToolExecutor;
 use serde_json::Value;
 
 const DEFAULT_MODEL: &str = "global.anthropic.claude-sonnet-4-6";
-const DEFAULT_MAX_TOOL_ITERATIONS: usize = 5;
+const DEFAULT_MAX_TOOL_ITERATIONS: usize = 20;
 const DEFAULT_SYSTEM_PROMPT: &str = "\
 You are a helpful assistant.
 Use the web_search tool when the user asks for recent, current, or web-based information.

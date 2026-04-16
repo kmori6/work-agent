@@ -1,12 +1,15 @@
 use crate::domain::error::tool_error::ToolError;
 use crate::domain::model::tool::ToolExecutionResult;
 use crate::domain::port::tool::Tool;
+use crate::infrastructure::util::path::{
+    has_parent_traversal, normalize_path, resolve_workspace_directory_path,
+};
 use async_trait::async_trait;
 use glob::{MatchOptions, Pattern};
 use ignore::WalkBuilder;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 pub struct FileSearchTool {
     workspace_root: PathBuf,
@@ -63,62 +66,6 @@ impl FileSearchTool {
 
         Ok(Self { workspace_root })
     }
-
-    fn resolve_search_root(&self, base_path: &str) -> Result<PathBuf, ToolError> {
-        let base_path = base_path.trim();
-        if base_path.is_empty() {
-            return Err(ToolError::InvalidArguments(
-                "'base_path' must not be empty".into(),
-            ));
-        }
-
-        let base_path = Path::new(base_path);
-
-        if base_path.is_absolute() {
-            return Err(ToolError::InvalidArguments(
-                "'base_path' must be a relative path".into(),
-            ));
-        }
-
-        if Self::has_parent_traversal(base_path) {
-            return Err(ToolError::PermissionDenied(
-                "path traversal is not allowed in 'base_path'".into(),
-            ));
-        }
-
-        let search_root = self.workspace_root.join(base_path);
-        let search_root = std::fs::canonicalize(&search_root).map_err(|err| {
-            ToolError::ExecutionFailed(format!("failed to resolve 'base_path': {err}"))
-        })?;
-
-        if !search_root.starts_with(&self.workspace_root) {
-            return Err(ToolError::PermissionDenied(
-                "'base_path' resolved outside the workspace".into(),
-            ));
-        }
-
-        if !search_root.is_dir() {
-            return Err(ToolError::InvalidArguments(
-                "'base_path' must point to a directory".into(),
-            ));
-        }
-
-        Ok(search_root)
-    }
-
-    fn has_parent_traversal(path: &Path) -> bool {
-        path.components()
-            .any(|component| matches!(component, Component::ParentDir))
-    }
-
-    fn normalize_path(path: &Path) -> String {
-        let text = path.to_string_lossy().replace('\\', "/");
-        if text.is_empty() {
-            ".".to_string()
-        } else {
-            text
-        }
-    }
 }
 
 #[async_trait]
@@ -141,7 +88,7 @@ impl Tool for FileSearchTool {
                 },
                 "base_path": {
                     "type": "string",
-                    "description": "Base directory to search from. Default is current workspace root."
+                    "description": "Base directory to search from. Relative paths are resolved from the workspace root. Absolute paths are allowed only if they stay inside the workspace. Default is current workspace root."
                 },
                 "kind": {
                     "type": "string",
@@ -192,7 +139,7 @@ impl Tool for FileSearchTool {
             ));
         }
 
-        if Self::has_parent_traversal(pattern_path) {
+        if has_parent_traversal(pattern_path) {
             return Err(ToolError::PermissionDenied(
                 "path traversal is not allowed in 'pattern'".into(),
             ));
@@ -265,7 +212,7 @@ impl Tool for FileSearchTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let search_root = self.resolve_search_root(base_path)?;
+        let search_root = resolve_workspace_directory_path(&self.workspace_root, base_path)?;
 
         let mut walker = WalkBuilder::new(&search_root);
         walker.hidden(!include_hidden);
@@ -314,8 +261,8 @@ impl Tool for FileSearchTool {
                 continue;
             };
 
-            let relative_to_search_root = Self::normalize_path(relative_to_search_root);
-            let relative_to_workspace = Self::normalize_path(relative_to_workspace);
+            let relative_to_search_root = normalize_path(relative_to_search_root);
+            let relative_to_workspace = normalize_path(relative_to_workspace);
 
             if !matcher.matches_with(&relative_to_search_root, match_options) {
                 continue;
@@ -370,7 +317,7 @@ impl Tool for FileSearchTool {
         }
 
         let base_path = match search_root.strip_prefix(&self.workspace_root) {
-            Ok(path) => Self::normalize_path(path),
+            Ok(path) => normalize_path(path),
             Err(_) => ".".to_string(),
         };
 

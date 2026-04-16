@@ -1,13 +1,16 @@
 use crate::domain::error::tool_error::ToolError;
 use crate::domain::model::tool::ToolExecutionResult;
 use crate::domain::port::tool::Tool;
+use crate::infrastructure::util::path::{
+    has_parent_traversal, normalize_path, resolve_workspace_directory_path,
+};
 use async_trait::async_trait;
 use glob::{MatchOptions, Pattern};
 use ignore::WalkBuilder;
 use regex::{Regex, RegexBuilder};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 const DEFAULT_MAX_RESULTS: usize = 20;
 const MAX_RESULTS: usize = 200;
@@ -60,62 +63,6 @@ impl TextSearchTool {
         }
 
         Ok(Self { workspace_root })
-    }
-
-    fn has_parent_traversal(path: &Path) -> bool {
-        path.components()
-            .any(|component| matches!(component, Component::ParentDir))
-    }
-
-    fn normalize_path(path: &Path) -> String {
-        let text = path.to_string_lossy().replace('\\', "/");
-        if text.is_empty() {
-            ".".to_string()
-        } else {
-            text
-        }
-    }
-
-    fn resolve_search_root(&self, base_path: &str) -> Result<PathBuf, ToolError> {
-        let base_path = base_path.trim();
-        if base_path.is_empty() {
-            return Err(ToolError::InvalidArguments(
-                "'base_path' must not be empty".into(),
-            ));
-        }
-
-        let base_path = Path::new(base_path);
-
-        if base_path.is_absolute() {
-            return Err(ToolError::InvalidArguments(
-                "'base_path' must be a relative path".into(),
-            ));
-        }
-
-        if Self::has_parent_traversal(base_path) {
-            return Err(ToolError::PermissionDenied(
-                "path traversal is not allowed in 'base_path'".into(),
-            ));
-        }
-
-        let search_root = self.workspace_root.join(base_path);
-        let search_root = std::fs::canonicalize(&search_root).map_err(|err| {
-            ToolError::ExecutionFailed(format!("failed to resolve 'base_path': {err}"))
-        })?;
-
-        if !search_root.starts_with(&self.workspace_root) {
-            return Err(ToolError::PermissionDenied(
-                "'base_path' resolved outside the workspace".into(),
-            ));
-        }
-
-        if !search_root.is_dir() {
-            return Err(ToolError::InvalidArguments(
-                "'base_path' must point to a directory".into(),
-            ));
-        }
-
-        Ok(search_root)
     }
 
     fn build_snippet(lines: &[&str], line_index: usize, context_lines: usize) -> String {
@@ -184,7 +131,7 @@ impl Tool for TextSearchTool {
                 },
                 "base_path": {
                     "type": "string",
-                    "description": "Base directory to search from. Default is current workspace root."
+                    "description": "Base directory to search from. Relative paths are resolved from the workspace root. Absolute paths are allowed only if they stay inside the workspace. Default is current workspace root."
                 },
                 "file_pattern": {
                     "type": "string",
@@ -240,7 +187,7 @@ impl Tool for TextSearchTool {
                 ));
             }
 
-            if Self::has_parent_traversal(path) {
+            if has_parent_traversal(path) {
                 return Err(ToolError::PermissionDenied(
                     "path traversal is not allowed in 'file_pattern'".into(),
                 ));
@@ -301,7 +248,7 @@ impl Tool for TextSearchTool {
             None => DEFAULT_MAX_RESULTS,
         };
 
-        let search_root = self.resolve_search_root(base_path)?;
+        let search_root = resolve_workspace_directory_path(&self.workspace_root, base_path)?;
 
         let regex = if match_mode == MatchMode::Regex {
             Some(
@@ -377,8 +324,8 @@ impl Tool for TextSearchTool {
                 continue;
             };
 
-            let relative_to_search_root = Self::normalize_path(relative_to_search_root);
-            let relative_to_workspace = Self::normalize_path(relative_to_workspace);
+            let relative_to_search_root = normalize_path(relative_to_search_root);
+            let relative_to_workspace = normalize_path(relative_to_workspace);
 
             if let Some(pattern) = &file_pattern_matcher
                 && !pattern.matches_with(&relative_to_search_root, file_match_options)
@@ -443,7 +390,7 @@ impl Tool for TextSearchTool {
 
         let base_path = search_root
             .strip_prefix(&self.workspace_root)
-            .map(Self::normalize_path)
+            .map(normalize_path)
             .unwrap_or_else(|_| ".".to_string());
 
         Ok(ToolExecutionResult::success(json!({
