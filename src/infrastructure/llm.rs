@@ -1,1 +1,1 @@
-pub mod bedrock_llm_client;
+pub mod bedrock_llm_provider;

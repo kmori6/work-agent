@@ -1,6 +1,6 @@
-use clap::{Parser, Subcommand};
-
 pub mod agent_cli;
+
+use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 pub struct Cli {

@@ -1,11 +1,7 @@
-use crate::application::port::llm_client::LlmRequest;
-use crate::application::{
-    error::agent_usecase_error::AgentUsecaseError, port::llm_client::LlmClient,
-};
-use crate::domain::model::message::Message;
-use crate::domain::model::role::Role;
-
-const MODEL: &str = "global.anthropic.claude-sonnet-4-6";
+use crate::application::error::agent_usecase_error::AgentUsecaseError;
+use crate::domain::port::llm_provider::LlmProvider;
+use crate::domain::service::agent_service::AgentProgressEvent;
+use crate::domain::service::agent_service::AgentService;
 
 #[derive(Debug)]
 pub struct HandleAgentInput {
@@ -23,33 +19,40 @@ pub enum AgentEvent {
 }
 
 pub struct AgentUsecase<L> {
-    llm_client: L,
+    agent_service: AgentService<L>,
 }
 
-impl<L: LlmClient> AgentUsecase<L> {
-    pub fn new(llm_client: L) -> Self {
-        Self { llm_client }
+impl<L: LlmProvider> AgentUsecase<L> {
+    pub fn new(agent_service: AgentService<L>) -> Self {
+        Self { agent_service }
     }
 
     pub async fn handle(
         &self,
         input: HandleAgentInput,
     ) -> Result<HandleAgentOutput, AgentUsecaseError> {
-        let response = self
-            .llm_client
-            .response(
-                LlmRequest {
-                    messages: vec![Message {
-                        role: Role::User,
-                        content: input.user_input,
-                    }],
-                },
-                MODEL,
-            )
+        let result = self.agent_service.run(input.user_input).await?;
+
+        Ok(HandleAgentOutput {
+            reply: vec![AgentEvent::AssistantMessage(result.final_text)],
+        })
+    }
+
+    pub async fn handle_with_progress<F>(
+        &self,
+        input: HandleAgentInput,
+        emit: F,
+    ) -> Result<HandleAgentOutput, AgentUsecaseError>
+    where
+        F: FnMut(AgentProgressEvent),
+    {
+        let result = self
+            .agent_service
+            .run_with_progress(input.user_input, emit)
             .await?;
 
         Ok(HandleAgentOutput {
-            reply: vec![AgentEvent::AssistantMessage(response.text)],
+            reply: vec![AgentEvent::AssistantMessage(result.final_text)],
         })
     }
 }
