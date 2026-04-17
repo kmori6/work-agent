@@ -11,6 +11,7 @@ use reedline::{
 use serde_json::Value;
 use std::borrow::Cow;
 use std::io::{Write, stderr};
+use termimad::print_text;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, MissedTickBehavior, interval};
@@ -236,7 +237,7 @@ async fn handle_user_message<L: LlmProvider>(
 fn print_agent_output(output: HandleAgentOutput) {
     for event in output.reply {
         match event {
-            AgentEvent::AssistantMessage(message) => println!("{message}"),
+            AgentEvent::AssistantMessage(message) => print_text(&message),
         }
     }
 }
