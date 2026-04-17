@@ -1,0 +1,17 @@
+services:
+  asr:
+    image: fedirz/faster-whisper-server:latest-cuda
+    ports:
+      - "8000:8000"
+    environment:
+      - WHISPER__MODEL=mobiuslabsgmbh/faster-whisper-large-v3-turbo
+      - WHISPER__INFERENCE_DEVICE=cuda
+      - WHISPER__BEAM_SIZE=5
+      - WHISPER__VAD_FILTER=true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

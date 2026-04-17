@@ -1,21 +1,23 @@
 use crate::domain::error::tool_error::ToolError;
 use crate::domain::model::tool::ToolExecutionResult;
 use crate::domain::port::tool::Tool;
-use crate::infrastructure::util::path::{normalize_path, resolve_workspace_file_path};
+use crate::infrastructure::util::path::{normalize_path, read_workspace_text_file};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-const DEFAULT_LINE_COUNT: usize = 200;
-const MAX_LINE_COUNT: usize = 400;
-const MAX_FILE_SIZE_BYTES: u64 = 1_048_576;
-
 pub struct TextFileReadTool {
     workspace_root: PathBuf,
+    max_file_size: u64,
+    max_line_count: usize,
 }
 
 impl TextFileReadTool {
-    pub fn new(workspace_root: impl Into<PathBuf>) -> Result<Self, ToolError> {
+    pub fn new(
+        workspace_root: impl Into<PathBuf>,
+        max_file_size: u64,
+        max_line_count: usize,
+    ) -> Result<Self, ToolError> {
         let workspace_root = std::fs::canonicalize(workspace_root.into()).map_err(|err| {
             ToolError::Unavailable(format!("failed to resolve workspace root: {err}"))
         })?;
@@ -26,7 +28,11 @@ impl TextFileReadTool {
             ));
         }
 
-        Ok(Self { workspace_root })
+        Ok(Self {
+            workspace_root,
+            max_file_size,
+            max_line_count,
+        })
     }
 }
 
@@ -56,8 +62,8 @@ impl Tool for TextFileReadTool {
                 "line_count": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": MAX_LINE_COUNT,
-                    "description": "Maximum number of lines to return. Default is 200."
+                    "maximum": self.max_line_count,
+                    "description": "Maximum number of lines to return. If omitted, reads to the end of the file."
                 }
             },
             "required": ["path"]
@@ -99,45 +105,20 @@ impl Tool for TextFileReadTool {
                     ToolError::InvalidArguments("'line_count' is out of supported range".into())
                 })?;
 
-                if value == 0 || value > MAX_LINE_COUNT {
+                if value == 0 || value > self.max_line_count {
                     return Err(ToolError::InvalidArguments(format!(
-                        "'line_count' must be between 1 and {MAX_LINE_COUNT}"
+                        "'line_count' must be between 1 and {}",
+                        self.max_line_count
                     )));
                 }
 
                 value
             }
-            None => DEFAULT_LINE_COUNT,
+            None => usize::MAX,
         };
 
-        let resolved_path = resolve_workspace_file_path(&self.workspace_root, path)?;
-
-        let metadata = tokio::fs::metadata(&resolved_path).await.map_err(|err| {
-            ToolError::ExecutionFailed(format!("failed to read file metadata: {err}"))
-        })?;
-
-        if metadata.len() > MAX_FILE_SIZE_BYTES {
-            return Err(ToolError::ExecutionFailed(format!(
-                "file is too large to read safely: {} bytes (max: {MAX_FILE_SIZE_BYTES})",
-                metadata.len()
-            )));
-        }
-
-        let bytes = tokio::fs::read(&resolved_path)
-            .await
-            .map_err(|err| ToolError::ExecutionFailed(format!("failed to read file: {err}")))?;
-
-        if bytes.contains(&0) {
-            return Err(ToolError::ExecutionFailed(
-                "file appears to be binary and cannot be read with 'text_file_read'".into(),
-            ));
-        }
-
-        let content = String::from_utf8(bytes).map_err(|_| {
-            ToolError::ExecutionFailed(
-                "file is not valid UTF-8 text and cannot be read with 'text_file_read'".into(),
-            )
-        })?;
+        let (resolved_path, content) =
+            read_workspace_text_file(&self.workspace_root, path, self.max_file_size).await?;
 
         let lines: Vec<&str> = content.lines().collect();
         let total_lines = lines.len();
@@ -156,7 +137,7 @@ impl Tool for TextFileReadTool {
         let relative_path = resolved_path
             .strip_prefix(&self.workspace_root)
             .map(normalize_path)
-            .unwrap_or_else(|_| normalize_path(&resolved_path));
+            .expect("resolved_path must be inside workspace_root");
 
         let returned_lines = visible_lines.len();
         let end_line = if returned_lines == 0 {
@@ -174,5 +155,48 @@ impl Tool for TextFileReadTool {
             "truncated": end_index < total_lines,
             "content": formatted_content
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_tmp_dir() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = PathBuf::from("/tmp").join(format!("work-agent-text-read-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn reads_requested_line_range() {
+        let root = make_tmp_dir();
+        fs::write(root.join("notes.txt"), "alpha\nbeta\ngamma\ndelta\n").unwrap();
+
+        let tool = TextFileReadTool::new(root, 1_048_576, 400).unwrap();
+        let result = tool
+            .execute(json!({
+                "path": "notes.txt",
+                "start_line": 2,
+                "line_count": 2
+            }))
+            .await
+            .unwrap();
+
+        assert!(!result.is_error);
+        assert_eq!(result.output["path"], json!("notes.txt"));
+        assert_eq!(result.output["start_line"], json!(2));
+        assert_eq!(result.output["end_line"], json!(3));
+        assert_eq!(result.output["total_lines"], json!(4));
+        assert_eq!(result.output["returned_lines"], json!(2));
+        assert_eq!(result.output["truncated"], json!(true));
+        assert_eq!(result.output["content"], json!("2 | beta\n3 | gamma"));
     }
 }

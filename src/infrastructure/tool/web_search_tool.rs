@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tavily::{SearchRequest, Tavily, TavilyError};
 
+const DURATION_SECS: u64 = 30;
+
 pub struct WebSearchTool {
     api_key: String,
     client: Tavily,
@@ -16,23 +18,9 @@ impl WebSearchTool {
         let api_key = api_key.into();
 
         let client = Tavily::builder(&api_key)
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(DURATION_SECS))
             .build()
-            .map_err(|err| match err {
-                TavilyError::Configuration(msg) => {
-                    ToolError::Unavailable(format!("tavily configuration error: {msg}"))
-                }
-                TavilyError::RateLimit(msg) => {
-                    ToolError::Unavailable(format!("tavily rate limit: {msg}"))
-                }
-                TavilyError::Http(err) if err.is_timeout() => ToolError::Timeout,
-                TavilyError::Http(err) => {
-                    ToolError::Unavailable(format!("tavily http error: {err}"))
-                }
-                TavilyError::Api(msg) => {
-                    ToolError::ExecutionFailed(format!("tavily api error: {msg}"))
-                }
-            })?;
+            .map_err(map_tavily_error)?;
 
         Ok(Self { api_key, client })
     }
@@ -257,17 +245,7 @@ impl Tool for WebSearchTool {
             request = request.exclude_domains(exclude_domains);
         }
 
-        let response = self.client.call(&request).await.map_err(|err| match err {
-            TavilyError::Configuration(msg) => {
-                ToolError::Unavailable(format!("tavily configuration error: {msg}"))
-            }
-            TavilyError::RateLimit(msg) => {
-                ToolError::Unavailable(format!("tavily rate limit: {msg}"))
-            }
-            TavilyError::Http(err) if err.is_timeout() => ToolError::Timeout,
-            TavilyError::Http(err) => ToolError::Unavailable(format!("tavily http error: {err}")),
-            TavilyError::Api(msg) => ToolError::ExecutionFailed(format!("tavily api error: {msg}")),
-        })?;
+        let response = self.client.call(&request).await.map_err(map_tavily_error)?;
 
         Ok(ToolExecutionResult::success(json!({
             "query": response.query,
@@ -283,5 +261,17 @@ impl Tool for WebSearchTool {
                 "raw_content": item.raw_content
             })).collect::<Vec<_>>()
         })))
+    }
+}
+
+fn map_tavily_error(err: TavilyError) -> ToolError {
+    match err {
+        TavilyError::Configuration(msg) => {
+            ToolError::Unavailable(format!("tavily configuration error: {msg}"))
+        }
+        TavilyError::RateLimit(msg) => ToolError::Unavailable(format!("tavily rate limit: {msg}")),
+        TavilyError::Http(err) if err.is_timeout() => ToolError::Timeout,
+        TavilyError::Http(err) => ToolError::Unavailable(format!("tavily http error: {err}")),
+        TavilyError::Api(msg) => ToolError::ExecutionFailed(format!("tavily api error: {msg}")),
     }
 }

@@ -1,59 +1,19 @@
 use crate::domain::error::tool_error::ToolError;
 use crate::domain::model::tool::ToolExecutionResult;
 use crate::domain::port::tool::Tool;
-use crate::infrastructure::util::path::{
-    has_parent_traversal, normalize_path, resolve_workspace_directory_path,
-};
+use crate::infrastructure::util::path::{contains_parent_dir, normalize_path};
 use async_trait::async_trait;
-use glob::{MatchOptions, Pattern};
-use ignore::WalkBuilder;
+use glob::{MatchOptions, glob_with};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub struct FileSearchTool {
     workspace_root: PathBuf,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SearchKind {
-    File,
-    Directory,
-    Any,
-}
-
-impl SearchKind {
-    fn parse(value: Option<&Value>) -> Result<Self, ToolError> {
-        match value.and_then(|v| v.as_str()) {
-            None => Ok(Self::File),
-            Some("file") => Ok(Self::File),
-            Some("directory") => Ok(Self::Directory),
-            Some("any") => Ok(Self::Any),
-            Some(other) => Err(ToolError::InvalidArguments(format!(
-                "'kind' must be one of: file, directory, any. got: {other}"
-            ))),
-        }
-    }
-
-    fn matches(self, is_file: bool, is_dir: bool) -> bool {
-        match self {
-            Self::File => is_file,
-            Self::Directory => is_dir,
-            Self::Any => is_file || is_dir,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::File => "file",
-            Self::Directory => "directory",
-            Self::Any => "any",
-        }
-    }
+    max_results: usize,
 }
 
 impl FileSearchTool {
-    pub fn new(workspace_root: impl Into<PathBuf>) -> Result<Self, ToolError> {
+    pub fn new(workspace_root: impl Into<PathBuf>, max_results: usize) -> Result<Self, ToolError> {
         let workspace_root = std::fs::canonicalize(workspace_root.into()).map_err(|err| {
             ToolError::Unavailable(format!("failed to resolve workspace root: {err}"))
         })?;
@@ -64,7 +24,10 @@ impl FileSearchTool {
             ));
         }
 
-        Ok(Self { workspace_root })
+        Ok(Self {
+            workspace_root,
+            max_results,
+        })
     }
 }
 
@@ -75,7 +38,7 @@ impl Tool for FileSearchTool {
     }
 
     fn description(&self) -> &str {
-        "Search files or directories in the workspace by glob-style path pattern."
+        "Search files by glob-style path pattern."
     }
 
     fn parameters(&self) -> Value {
@@ -84,39 +47,7 @@ impl Tool for FileSearchTool {
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "Glob pattern relative to base_path. Example: src/**/*.rs"
-                },
-                "base_path": {
-                    "type": "string",
-                    "description": "Base directory to search from. Relative paths are resolved from the workspace root. Absolute paths are allowed only if they stay inside the workspace. Default is current workspace root."
-                },
-                "kind": {
-                    "type": "string",
-                    "enum": ["file", "directory", "any"],
-                    "description": "Which kinds of paths to return. Default is file."
-                },
-                "max_results": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 200,
-                    "description": "Maximum number of matches to return. Default is 50."
-                },
-                "include_hidden": {
-                    "type": "boolean",
-                    "description": "Whether to include hidden files and directories. Default is false."
-                },
-                "respect_gitignore": {
-                    "type": "boolean",
-                    "description": "Whether to respect .gitignore and .ignore rules. Default is true."
-                },
-                "max_depth": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Optional maximum directory depth."
-                },
-                "follow_symlinks": {
-                    "type": "boolean",
-                    "description": "Whether to follow symbolic links. Default is false."
+                    "description": "Glob pattern to match files. Relative patterns are resolved from the workspace root. Example: src/**/*.rs"
                 }
             },
             "required": ["pattern"]
@@ -124,7 +55,6 @@ impl Tool for FileSearchTool {
     }
 
     async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError> {
-        // Keep parsing strict so the model gets fast feedback when it calls the tool incorrectly.
         let pattern = arguments
             .get("pattern")
             .and_then(|v| v.as_str())
@@ -132,208 +62,118 @@ impl Tool for FileSearchTool {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| ToolError::InvalidArguments("missing or invalid 'pattern'".into()))?;
 
+        // Security: reject absolute patterns and path traversal
         let pattern_path = Path::new(pattern);
         if pattern_path.is_absolute() {
-            return Err(ToolError::InvalidArguments(
-                "'pattern' must be relative to 'base_path'".into(),
-            ));
-        }
-
-        if has_parent_traversal(pattern_path) {
             return Err(ToolError::PermissionDenied(
-                "path traversal is not allowed in 'pattern'".into(),
+                "absolute patterns are not allowed".into(),
             ));
         }
-
-        let matcher = Pattern::new(pattern)
-            .map_err(|err| ToolError::InvalidArguments(format!("invalid 'pattern': {err}")))?;
-
-        let base_path = arguments
-            .get("base_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
-
-        let kind = SearchKind::parse(arguments.get("kind"))?;
-
-        let max_results = match arguments.get("max_results") {
-            Some(value) => {
-                let value = value.as_u64().ok_or_else(|| {
-                    ToolError::InvalidArguments("'max_results' must be an integer".into())
-                })?;
-
-                let value = usize::try_from(value).map_err(|_| {
-                    ToolError::InvalidArguments("'max_results' is out of supported range".into())
-                })?;
-
-                if value == 0 || value > 200 {
-                    return Err(ToolError::InvalidArguments(
-                        "'max_results' must be between 1 and 200".into(),
-                    ));
-                }
-
-                value
-            }
-            None => 50,
-        };
-
-        let include_hidden = arguments
-            .get("include_hidden")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let respect_gitignore = arguments
-            .get("respect_gitignore")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-
-        let max_depth = match arguments.get("max_depth") {
-            Some(value) => {
-                let value = value.as_u64().ok_or_else(|| {
-                    ToolError::InvalidArguments("'max_depth' must be an integer".into())
-                })?;
-
-                let value = usize::try_from(value).map_err(|_| {
-                    ToolError::InvalidArguments("'max_depth' is out of supported range".into())
-                })?;
-
-                if value == 0 {
-                    return Err(ToolError::InvalidArguments(
-                        "'max_depth' must be greater than 0".into(),
-                    ));
-                }
-
-                Some(value)
-            }
-            None => None,
-        };
-
-        let follow_symlinks = arguments
-            .get("follow_symlinks")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let search_root = resolve_workspace_directory_path(&self.workspace_root, base_path)?;
-
-        let mut walker = WalkBuilder::new(&search_root);
-        walker.hidden(!include_hidden);
-        walker.git_ignore(respect_gitignore);
-        walker.git_exclude(respect_gitignore);
-        walker.ignore(respect_gitignore);
-        walker.parents(respect_gitignore);
-        walker.follow_links(follow_symlinks);
-        walker.max_depth(max_depth);
+        if contains_parent_dir(pattern_path) {
+            return Err(ToolError::PermissionDenied(
+                "path traversal is not allowed in patterns".into(),
+            ));
+        }
 
         let match_options = MatchOptions {
             case_sensitive: true,
-            require_literal_separator: false,
-            require_literal_leading_dot: !include_hidden,
+            require_literal_separator: true,
+            require_literal_leading_dot: false,
         };
 
-        let mut files = 0usize;
-        let mut directories = 0usize;
-        let mut extensions = BTreeMap::<String, usize>::new();
-        let mut total_matches = 0usize;
+        let search_pattern = self
+            .workspace_root
+            .join(pattern)
+            .to_string_lossy()
+            .to_string();
+
+        let entries = glob_with(&search_pattern, match_options)
+            .map_err(|err| ToolError::InvalidArguments(format!("invalid 'pattern': {err}")))?;
+
         let mut matches = Vec::new();
 
-        for entry in walker.build() {
-            let Ok(entry) = entry else {
-                // Skip unreadable entries instead of failing the whole search.
+        for entry in entries {
+            let Ok(path) = entry else {
                 continue;
             };
 
-            let logical_path = entry.path();
-
-            // Defensive check: when following symlinks, make sure the resolved path
-            // still stays inside the workspace boundary.
-            let Ok(resolved_path) = std::fs::canonicalize(logical_path) else {
+            // Resolve symlinks and verify the result stays inside the workspace
+            let Ok(canonical) = std::fs::canonicalize(&path) else {
                 continue;
             };
-
-            if !resolved_path.starts_with(&self.workspace_root) {
+            if !canonical.starts_with(&self.workspace_root) {
+                continue;
+            }
+            if !canonical.is_file() {
                 continue;
             }
 
-            let Ok(relative_to_search_root) = logical_path.strip_prefix(&search_root) else {
-                continue;
-            };
-
-            let Ok(relative_to_workspace) = logical_path.strip_prefix(&self.workspace_root) else {
-                continue;
-            };
-
-            let relative_to_search_root = normalize_path(relative_to_search_root);
-            let relative_to_workspace = normalize_path(relative_to_workspace);
-
-            if !matcher.matches_with(&relative_to_search_root, match_options) {
-                continue;
-            }
-
-            let file_type = entry.file_type();
-            let is_file = file_type
-                .map(|ft| ft.is_file())
-                .unwrap_or_else(|| logical_path.is_file());
-            let is_dir = file_type
-                .map(|ft| ft.is_dir())
-                .unwrap_or_else(|| logical_path.is_dir());
-
-            if !kind.matches(is_file, is_dir) {
-                continue;
-            }
-
-            total_matches += 1;
-
-            if is_file {
-                files += 1;
-
-                if let Some(extension) = logical_path
-                    .extension()
-                    .and_then(|v| v.to_str())
-                    .filter(|v| !v.is_empty())
-                {
-                    *extensions.entry(extension.to_string()).or_insert(0) += 1;
-                }
-            }
-
-            if is_dir {
-                directories += 1;
-            }
-
-            if matches.len() < max_results {
-                let extension = if is_file {
-                    logical_path
-                        .extension()
-                        .and_then(|v| v.to_str())
-                        .map(|v| v.to_string())
-                } else {
-                    None
-                };
-
-                matches.push(json!({
-                    "path": relative_to_workspace,
-                    "kind": if is_dir { "directory" } else { "file" },
-                    "extension": extension
-                }));
-            }
+            let relative = canonical
+                .strip_prefix(&self.workspace_root)
+                .map(normalize_path)
+                .expect("canonical path must be inside workspace_root");
+            matches.push(relative);
         }
 
-        let base_path = match search_root.strip_prefix(&self.workspace_root) {
-            Ok(path) => normalize_path(path),
-            Err(_) => ".".to_string(),
-        };
+        matches.sort();
+        matches.dedup();
+        let total_matches = matches.len();
+        let truncated = total_matches > self.max_results;
+        matches.truncate(self.max_results);
 
         Ok(ToolExecutionResult::success(json!({
-            "base_path": base_path,
             "pattern": pattern,
-            "kind": kind.as_str(),
             "total_matches": total_matches,
-            "returned_matches": matches.len(),
-            "truncated": total_matches > matches.len(),
-            "summary": {
-                "files": files,
-                "directories": directories,
-                "extensions": extensions
-            },
-            "matches": matches
+            "matches": matches,
+            "truncated": truncated,
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_tmp_dir() -> PathBuf {
+        // Dummy directory
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("work-agent-file-search-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+
+        // Dummy files
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/lib.rs"), "").unwrap();
+        fs::write(dir.join("src/main.rs"), "").unwrap();
+        fs::write(dir.join("README.md"), "").unwrap();
+
+        dir
+    }
+
+    #[tokio::test]
+    async fn finds_matching_files() {
+        let root = make_tmp_dir();
+        let tool = FileSearchTool::new(root, 200).unwrap();
+
+        let result = tool
+            .execute(json!({
+                "pattern": "src/**/*.rs"
+            }))
+            .await
+            .unwrap();
+
+        assert!(!result.is_error);
+        assert_eq!(
+            result.output["matches"],
+            json!(["src/lib.rs", "src/main.rs"])
+        );
+
+        // Cleanup
+        fs::remove_dir_all(tool.workspace_root).unwrap();
     }
 }
