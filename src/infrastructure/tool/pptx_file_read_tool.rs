@@ -30,7 +30,7 @@ impl PptxReadTool {
 #[async_trait]
 impl Tool for PptxReadTool {
     fn name(&self) -> &str {
-        "pptx_read"
+        "pptx_file_read"
     }
 
     fn description(&self) -> &str {
