@@ -7,11 +7,9 @@ use work_agent::domain::service::agent_service::AgentService;
 use work_agent::domain::service::tool_service::ToolExecutor;
 use work_agent::infrastructure::tool::asr_tool::AsrTool;
 use work_agent::infrastructure::tool::file_search_tool::FileSearchTool;
-use work_agent::infrastructure::tool::pdf_file_read_tool::PdfFileReadTool;
-use work_agent::infrastructure::tool::pptx_file_read_tool::PptxReadTool;
+use work_agent::infrastructure::tool::read_file_tool::ReadFileTool;
 use work_agent::infrastructure::tool::research_tool::ResearchTool;
 use work_agent::infrastructure::tool::text_file_edit_tool::TextFileEditTool;
-use work_agent::infrastructure::tool::text_file_read_tool::TextFileReadTool;
 use work_agent::infrastructure::tool::text_file_write_tool::TextFileWriteTool;
 use work_agent::infrastructure::tool::text_search_tool::TextSearchTool;
 use work_agent::infrastructure::tool::web_fetch_tool::WebFetchTool;
@@ -42,16 +40,10 @@ async fn main() -> Result<(), AgentCliError> {
             let tool_executor = ToolExecutor::new(vec![
                 Arc::new(AsrTool::from_env(workspace_root.clone())?),
                 Arc::new(FileSearchTool::new(workspace_root.clone(), 200)?),
-                Arc::new(PdfFileReadTool::new(workspace_root.clone())?),
-                Arc::new(PptxReadTool::new(workspace_root.clone())?),
                 Arc::new(research_tool),
                 Arc::new(TextFileWriteTool::new(workspace_root.clone())?),
                 Arc::new(TextFileEditTool::new(workspace_root.clone(), 1_048_576)?),
-                Arc::new(TextFileReadTool::new(
-                    workspace_root.clone(),
-                    1_048_576,
-                    400,
-                )?),
+                Arc::new(ReadFileTool::new(workspace_root.clone(), 1_048_576)?),
                 Arc::new(TextSearchTool::new(workspace_root, 1_048_576, 200, 10)?),
                 Arc::new(WebFetchTool::new()?),
                 Arc::new(WebSearchTool::from_env()?),
