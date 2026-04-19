@@ -8,11 +8,11 @@ use work_agent::domain::service::tool_service::ToolExecutor;
 use work_agent::infrastructure::tool::asr_tool::AsrTool;
 use work_agent::infrastructure::tool::file_read_tool::FileReadTool;
 use work_agent::infrastructure::tool::file_search_tool::FileSearchTool;
+use work_agent::infrastructure::tool::file_write_tool::FileWriteTool;
 use work_agent::infrastructure::tool::ocr_tool::OcrTool;
 use work_agent::infrastructure::tool::research_tool::ResearchTool;
 use work_agent::infrastructure::tool::shell_exec_tool::ShellExecTool;
 use work_agent::infrastructure::tool::text_file_edit_tool::TextFileEditTool;
-use work_agent::infrastructure::tool::text_file_write_tool::TextFileWriteTool;
 use work_agent::infrastructure::tool::text_search_tool::TextSearchTool;
 use work_agent::infrastructure::tool::web_fetch_tool::WebFetchTool;
 use work_agent::infrastructure::tool::web_search_tool::WebSearchTool;
@@ -45,7 +45,7 @@ async fn main() -> Result<(), AgentCliError> {
                 Arc::new(OcrTool::new(workspace_root.clone())?),
                 Arc::new(research_tool),
                 Arc::new(ShellExecTool::new(workspace_root.clone())?),
-                Arc::new(TextFileWriteTool::new(workspace_root.clone())?),
+                Arc::new(FileWriteTool::new(workspace_root.clone())?),
                 Arc::new(TextFileEditTool::new(workspace_root.clone(), 1_048_576)?),
                 Arc::new(FileReadTool::new(workspace_root.clone(), 1_048_576)?),
                 Arc::new(TextSearchTool::new(workspace_root, 1_048_576, 200, 10)?),

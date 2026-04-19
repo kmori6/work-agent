@@ -6,11 +6,11 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-pub struct TextFileWriteTool {
+pub struct FileWriteTool {
     workspace_root: PathBuf,
 }
 
-impl TextFileWriteTool {
+impl FileWriteTool {
     pub fn new(workspace_root: impl Into<PathBuf>) -> Result<Self, ToolError> {
         let workspace_root = std::fs::canonicalize(workspace_root.into()).map_err(|err| {
             ToolError::Unavailable(format!("failed to resolve workspace root: {err}"))
@@ -57,29 +57,29 @@ impl TextFileWriteTool {
 }
 
 #[async_trait]
-impl Tool for TextFileWriteTool {
+impl Tool for FileWriteTool {
     fn name(&self) -> &str {
-        "text_file_write"
+        "file_write"
     }
 
     fn description(&self) -> &str {
-        "Create a new UTF-8 text file in the workspace."
+        "Write full UTF-8 text content to a file in the workspace. Creates parent directories automatically and replaces the file if it already exists."
     }
 
     fn parameters(&self) -> Value {
         json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the UTF-8 text file to create. Relative paths are resolved from the workspace root. Absolute paths are allowed only if they stay inside the workspace."
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Full text content to write to the new file."
-                }
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Path to the UTF-8 text file to write. Relative paths are resolved from the workspace root. Absolute paths are allowed only if they stay inside the workspace."
             },
-            "required": ["path", "content"]
+            "content": {
+              "type": "string",
+              "description": "Full UTF-8 text content to write."
+            }
+          },
+          "required": ["path", "content"]
         })
     }
 
@@ -97,12 +97,6 @@ impl Tool for TextFileWriteTool {
         let content_bytes = content.len() as u64;
 
         let target_path = self.resolve_target_path(path)?;
-
-        if target_path.exists() {
-            return Err(ToolError::ExecutionFailed(
-                "file already exists; use 'text_file_edit' to modify it".into(),
-            ));
-        }
 
         let parent = target_path
             .parent()
@@ -157,7 +151,7 @@ mod tests {
             .as_nanos();
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target/test-tmp")
-            .join(format!("work-agent-text-write-{unique}"));
+            .join(format!("work-agent-file-write-{unique}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -165,7 +159,7 @@ mod tests {
     #[tokio::test]
     async fn creates_new_file_with_parent_directories() {
         let root = make_tmp_dir();
-        let tool = TextFileWriteTool::new(root.clone()).unwrap();
+        let tool = FileWriteTool::new(root.clone()).unwrap();
 
         let result = tool
             .execute(json!({
@@ -184,20 +178,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fails_when_target_file_already_exists() {
+    async fn replaces_existing_file() {
         let root = make_tmp_dir();
         fs::create_dir_all(root.join("data")).unwrap();
         fs::write(root.join("data/existing.md"), "old").unwrap();
 
-        let tool = TextFileWriteTool::new(root).unwrap();
-        let err = tool
+        let tool = FileWriteTool::new(root.clone()).unwrap();
+        let result = tool
             .execute(json!({
                 "path": "data/existing.md",
                 "content": "new"
             }))
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert!(matches!(err, ToolError::ExecutionFailed(_)));
+        assert!(!result.is_error);
+        assert_eq!(result.output["path"], json!("data/existing.md"));
+        assert_eq!(result.output["bytes_written"], json!(3));
+        assert_eq!(
+            fs::read_to_string(root.join("data/existing.md")).unwrap(),
+            "new"
+        );
     }
 }
