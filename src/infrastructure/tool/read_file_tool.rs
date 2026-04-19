@@ -35,11 +35,11 @@ impl ReadFileTool {
 #[async_trait]
 impl Tool for ReadFileTool {
     fn name(&self) -> &str {
-        "text_file_read"
+        "file_read"
     }
 
     fn description(&self) -> &str {
-        "Read a UTF-8 text file from the workspace with line numbers and optional line-range limits."
+        "Read a file from the workspace. Text files are read directly; binary files (PDF, DOCX, PPTX, XLSX, etc.) are automatically converted to Markdown via markitdown."
     }
 
     fn parameters(&self) -> Value {
@@ -229,7 +229,16 @@ async fn read_content_from_binary_file(path: &PathBuf) -> Result<String, ToolErr
         )));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    let content = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    if content.trim().is_empty() {
+        return Err(ToolError::ExecutionFailed(
+            "markitdown returned empty output. The file may be a scanned document requiring OCR."
+                .into(),
+        ));
+    }
+
+    Ok(content)
 }
 
 #[cfg(test)]
