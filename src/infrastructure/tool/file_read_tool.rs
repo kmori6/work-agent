@@ -8,12 +8,12 @@ use std::io::Read;
 use std::path::PathBuf;
 use tokio::process::Command;
 
-pub struct ReadFileTool {
+pub struct FileReadTool {
     workspace_root: PathBuf,
     max_file_size: u64,
 }
 
-impl ReadFileTool {
+impl FileReadTool {
     pub fn new(workspace_root: impl Into<PathBuf>, max_file_size: u64) -> Result<Self, ToolError> {
         let workspace_root = std::fs::canonicalize(workspace_root.into()).map_err(|err| {
             ToolError::Unavailable(format!("failed to resolve workspace root: {err}"))
@@ -33,7 +33,7 @@ impl ReadFileTool {
 }
 
 #[async_trait]
-impl Tool for ReadFileTool {
+impl Tool for FileReadTool {
     fn name(&self) -> &str {
         "file_read"
     }
@@ -263,7 +263,7 @@ mod tests {
         let root = make_tmp_dir();
         fs::write(root.join("notes.txt"), "alpha\nbeta\ngamma\ndelta\n").unwrap();
 
-        let tool = ReadFileTool::new(root, 1_048_576).unwrap();
+        let tool = FileReadTool::new(root, 1_048_576).unwrap();
         let result = tool
             .execute(json!({
                 "path": "notes.txt",
