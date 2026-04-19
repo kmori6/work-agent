@@ -7,6 +7,7 @@ use work_agent::domain::service::agent_service::AgentService;
 use work_agent::domain::service::tool_service::ToolExecutor;
 use work_agent::infrastructure::tool::asr_tool::AsrTool;
 use work_agent::infrastructure::tool::file_search_tool::FileSearchTool;
+use work_agent::infrastructure::tool::ocr_tool::OcrTool;
 use work_agent::infrastructure::tool::read_file_tool::ReadFileTool;
 use work_agent::infrastructure::tool::research_tool::ResearchTool;
 use work_agent::infrastructure::tool::text_file_edit_tool::TextFileEditTool;
@@ -40,6 +41,7 @@ async fn main() -> Result<(), AgentCliError> {
             let tool_executor = ToolExecutor::new(vec![
                 Arc::new(AsrTool::from_env(workspace_root.clone())?),
                 Arc::new(FileSearchTool::new(workspace_root.clone(), 200)?),
+                Arc::new(OcrTool::new(workspace_root.clone())?),
                 Arc::new(research_tool),
                 Arc::new(TextFileWriteTool::new(workspace_root.clone())?),
                 Arc::new(TextFileEditTool::new(workspace_root.clone(), 1_048_576)?),
