@@ -15,3 +15,29 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  postgres:
+    image: postgres:18.3
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: example
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  flyway-admin:
+    image: flyway/flyway:12.4
+    depends_on:
+      - postgres
+    volumes:
+      - ./db/migration/admin:/flyway/sql
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/postgres
+      FLYWAY_USER: postgres
+      FLYWAY_PASSWORD: example
+      FLYWAY_CONNECT_RETRIES: 60
+    command: migrate
+
+volumes:
+  postgres_data:
