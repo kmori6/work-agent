@@ -1,11 +1,11 @@
 pub mod asr_tool;
+pub mod file_edit_tool;
 pub mod file_read_tool;
 pub mod file_search_tool;
 pub mod file_write_tool;
 pub mod ocr_tool;
 pub mod research_tool;
 pub mod shell_exec_tool;
-pub mod text_file_edit_tool;
 pub mod text_search_tool;
 pub mod web_fetch_tool;
 pub mod web_search_tool;
