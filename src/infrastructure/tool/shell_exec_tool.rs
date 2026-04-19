@@ -110,7 +110,7 @@ fn parse_command(arguments: &Value) -> Result<String, ToolError> {
     Ok(command.to_string())
 }
 
-fn parse_workdir(arguments: &Value, workspace_root: &PathBuf) -> Result<PathBuf, ToolError> {
+fn parse_workdir(arguments: &Value, workspace_root: &Path) -> Result<PathBuf, ToolError> {
     match arguments.get("workdir") {
         Some(value) => {
             let workdir = value
@@ -118,7 +118,7 @@ fn parse_workdir(arguments: &Value, workspace_root: &PathBuf) -> Result<PathBuf,
                 .ok_or_else(|| ToolError::InvalidArguments("'workdir' must be a string".into()))?;
             resolve_workspace_directory_path(workspace_root, workdir)
         }
-        None => Ok(workspace_root.clone()),
+        None => Ok(workspace_root.to_path_buf()),
     }
 }
 
