@@ -1,26 +1,21 @@
 use clap::Parser;
-use dotenvy::dotenv;
-use log::info;
-use sqlx::PgPool;
-use std::env;
-use std::sync::Arc;
-use work_agent::domain::service::agent_service::AgentService;
-use work_agent::domain::service::deep_research_service::DeepResearchService;
-use work_agent::domain::service::tool_service::ToolExecutor;
-use work_agent::infrastructure::persistence::postgres_chat_message_repository::PostgresChatMessageRepository;
-use work_agent::infrastructure::persistence::postgres_chat_session_repository::PostgresChatSessionRepository;
-use work_agent::infrastructure::search::tavily_search_provider::TavilySearchProvider;
-use work_agent::infrastructure::tool::asr_tool::AsrTool;
-use work_agent::infrastructure::tool::file_edit_tool::FileEditTool;
-use work_agent::infrastructure::tool::file_read_tool::FileReadTool;
-use work_agent::infrastructure::tool::file_search_tool::FileSearchTool;
-use work_agent::infrastructure::tool::file_write_tool::FileWriteTool;
-use work_agent::infrastructure::tool::ocr_tool::OcrTool;
-use work_agent::infrastructure::tool::shell_exec_tool::ShellExecTool;
-use work_agent::infrastructure::tool::text_search_tool::TextSearchTool;
-use work_agent::infrastructure::tool::web_fetch_tool::WebFetchTool;
-use work_agent::infrastructure::tool::web_search_tool::WebSearchTool;
-use work_agent::{
+use commander::domain::service::agent_service::AgentService;
+use commander::domain::service::deep_research_service::DeepResearchService;
+use commander::domain::service::tool_service::ToolExecutor;
+use commander::infrastructure::persistence::postgres_chat_message_repository::PostgresChatMessageRepository;
+use commander::infrastructure::persistence::postgres_chat_session_repository::PostgresChatSessionRepository;
+use commander::infrastructure::search::tavily_search_provider::TavilySearchProvider;
+use commander::infrastructure::tool::asr_tool::AsrTool;
+use commander::infrastructure::tool::file_edit_tool::FileEditTool;
+use commander::infrastructure::tool::file_read_tool::FileReadTool;
+use commander::infrastructure::tool::file_search_tool::FileSearchTool;
+use commander::infrastructure::tool::file_write_tool::FileWriteTool;
+use commander::infrastructure::tool::ocr_tool::OcrTool;
+use commander::infrastructure::tool::shell_exec_tool::ShellExecTool;
+use commander::infrastructure::tool::text_search_tool::TextSearchTool;
+use commander::infrastructure::tool::web_fetch_tool::WebFetchTool;
+use commander::infrastructure::tool::web_search_tool::WebSearchTool;
+use commander::{
     application::usecase::{agent_usecase::AgentUsecase, research_usecase::ResearchUsecase},
     infrastructure::llm::bedrock_llm_provider::BedrockLlmProvider,
     presentation::{
@@ -28,6 +23,11 @@ use work_agent::{
         error::agent_cli_error::AgentCliError,
     },
 };
+use dotenvy::dotenv;
+use log::info;
+use sqlx::PgPool;
+use std::env;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), AgentCliError> {

@@ -719,6 +719,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "commander"
+version = "0.1.0"
+dependencies = [
+ "async-recursion",
+ "async-trait",
+ "aws-config",
+ "aws-sdk-bedrockruntime",
+ "aws-smithy-types",
+ "chrono",
+ "clap",
+ "dotenvy",
+ "env_logger",
+ "glob",
+ "html2text",
+ "ignore",
+ "indicatif",
+ "log",
+ "reedline",
+ "regex",
+ "reqwest 0.13.2",
+ "serde_json",
+ "sqlx",
+ "tavily",
+ "termimad",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4554,36 +4584,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
-]
-
-[[package]]
-name = "work-agent"
-version = "0.1.0"
-dependencies = [
- "async-recursion",
- "async-trait",
- "aws-config",
- "aws-sdk-bedrockruntime",
- "aws-smithy-types",
- "chrono",
- "clap",
- "dotenvy",
- "env_logger",
- "glob",
- "html2text",
- "ignore",
- "indicatif",
- "log",
- "reedline",
- "regex",
- "reqwest 0.13.2",
- "serde_json",
- "sqlx",
- "tavily",
- "termimad",
- "thiserror 2.0.18",
- "tokio",
- "uuid",
 ]
 
 [[package]]

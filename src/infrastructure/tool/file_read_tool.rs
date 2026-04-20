@@ -253,7 +253,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = PathBuf::from("/tmp").join(format!("work-agent-text-read-{unique}"));
+        let dir = PathBuf::from("/tmp").join(format!("commander-text-read-{unique}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

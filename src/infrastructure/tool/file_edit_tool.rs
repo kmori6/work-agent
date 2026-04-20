@@ -135,7 +135,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = PathBuf::from("/tmp").join(format!("work-agent-file-edit-{unique}"));
+        let dir = PathBuf::from("/tmp").join(format!("commander-file-edit-{unique}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

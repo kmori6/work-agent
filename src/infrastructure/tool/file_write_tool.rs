@@ -151,7 +151,7 @@ mod tests {
             .as_nanos();
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target/test-tmp")
-            .join(format!("work-agent-file-write-{unique}"));
+            .join(format!("commander-file-write-{unique}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

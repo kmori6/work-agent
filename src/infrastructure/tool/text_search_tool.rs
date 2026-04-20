@@ -252,7 +252,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = PathBuf::from("/tmp").join(format!("work-agent-text-search-{unique}"));
+        let dir = PathBuf::from("/tmp").join(format!("commander-text-search-{unique}"));
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::write(
             dir.join("src/main.rs"),

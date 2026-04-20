@@ -1,6 +1,6 @@
 # Database
 
-This document is a short memo for the current database layout in `work-agent`.
+This document is a short memo for the current database layout in `commander`.
 
 ## Overview
 

@@ -1,6 +1,6 @@
 # Tools
 
-This document gives a short overview of the tools currently registered in `work-agent`.
+This document gives a short overview of the tools currently registered in `commander`.
 The current source of truth is [src/main.rs](../src/main.rs).
 
 ## Workspace tools

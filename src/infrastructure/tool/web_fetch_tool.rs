@@ -11,7 +11,7 @@ use std::time::Duration;
 const DEFAULT_MAX_CHARS: usize = 12_000;
 const MAX_CHARS: usize = 50_000;
 const DEFAULT_TIMEOUT_SECS: u64 = 20;
-const DEFAULT_USER_AGENT: &str = "work-agent/0.1 (web_fetch)";
+const DEFAULT_USER_AGENT: &str = "commander/0.1 (web_fetch)";
 
 pub struct WebFetchTool {
     client: reqwest::Client,
