@@ -9,6 +9,13 @@ pub struct LlmResponse {
     pub tool_calls: Vec<ToolCall>,
 }
 
+#[derive(Debug, Clone)]
+pub struct StructuredOutputSchema {
+    pub name: String,
+    pub description: Option<String>,
+    pub schema: serde_json::Value,
+}
+
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
     async fn response(&self, messages: Vec<Message>, model: &str)
@@ -20,4 +27,11 @@ pub trait LlmProvider: Send + Sync {
         tools: Vec<ToolSpec>,
         model: &str,
     ) -> Result<LlmResponse, LlmClientError>;
+
+    async fn response_with_structure(
+        &self,
+        messages: Vec<Message>,
+        schema: StructuredOutputSchema,
+        model: &str,
+    ) -> Result<serde_json::Value, LlmClientError>;
 }

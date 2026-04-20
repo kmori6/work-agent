@@ -8,8 +8,16 @@ pub enum AgentCliError {
     #[error("failed to execute agent use case: {0}")]
     Usecase(#[from] crate::application::error::agent_usecase_error::AgentUsecaseError),
 
+    #[error("failed to execute research use case: {0}")]
+    ResearchUsecase(
+        #[from] crate::application::error::research_usecase_error::ResearchUsecaseError,
+    ),
+
     #[error("failed to initialize tooling: {0}")]
     Tool(#[from] crate::domain::error::tool_error::ToolError),
+
+    #[error("failed to initialize search provider: {0}")]
+    Search(#[from] crate::domain::port::search_provider::SearchError),
 
     #[error("failed to read line input: {0}")]
     Readline(String),

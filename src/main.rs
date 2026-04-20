@@ -5,9 +5,11 @@ use sqlx::PgPool;
 use std::env;
 use std::sync::Arc;
 use work_agent::domain::service::agent_service::AgentService;
+use work_agent::domain::service::deep_research_service::DeepResearchService;
 use work_agent::domain::service::tool_service::ToolExecutor;
 use work_agent::infrastructure::persistence::postgres_chat_message_repository::PostgresChatMessageRepository;
 use work_agent::infrastructure::persistence::postgres_chat_session_repository::PostgresChatSessionRepository;
+use work_agent::infrastructure::search::tavily_search_provider::TavilySearchProvider;
 use work_agent::infrastructure::tool::asr_tool::AsrTool;
 use work_agent::infrastructure::tool::file_edit_tool::FileEditTool;
 use work_agent::infrastructure::tool::file_read_tool::FileReadTool;
@@ -19,10 +21,10 @@ use work_agent::infrastructure::tool::text_search_tool::TextSearchTool;
 use work_agent::infrastructure::tool::web_fetch_tool::WebFetchTool;
 use work_agent::infrastructure::tool::web_search_tool::WebSearchTool;
 use work_agent::{
-    application::usecase::agent_usecase::AgentUsecase,
+    application::usecase::{agent_usecase::AgentUsecase, research_usecase::ResearchUsecase},
     infrastructure::llm::bedrock_llm_provider::BedrockLlmProvider,
     presentation::{
-        cli::{Cli, Commands, agent_cli},
+        cli::{Cli, Commands, agent_cli, research_cli},
         error::agent_cli_error::AgentCliError,
     },
 };
@@ -69,6 +71,14 @@ async fn main() -> Result<(), AgentCliError> {
             );
 
             agent_cli::run(&usecase).await?;
+        }
+        Commands::Research => {
+            info!("Starting research...");
+            let llm_client = BedrockLlmProvider::from_default_config().await;
+            let search_provider = TavilySearchProvider::from_env()?;
+            let usecase =
+                ResearchUsecase::new(DeepResearchService::new(llm_client, search_provider));
+            research_cli::run(&usecase).await?;
         }
     }
 

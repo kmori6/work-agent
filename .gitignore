@@ -33,3 +33,6 @@ target
 
 /tmp
 /.cache/
+
+# Ignore the outputs directory, which may contain generated files or logs
+/outputs/

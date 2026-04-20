@@ -2,9 +2,12 @@ use crate::application::error::llm_client_error::LlmClientError;
 use crate::domain::model::message::{Message, MessageContent};
 use crate::domain::model::role::Role;
 use crate::domain::model::tool::{ToolCall, ToolSpec};
-use crate::domain::port::llm_provider::{LlmProvider, LlmResponse};
+use crate::domain::port::llm_provider::{LlmProvider, LlmResponse, StructuredOutputSchema};
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
+use aws_sdk_bedrockruntime::types::{
+    JsonSchemaDefinition, OutputConfig, OutputFormat, OutputFormatStructure, OutputFormatType,
+};
 use aws_sdk_bedrockruntime::{
     Client,
     types::{
@@ -13,8 +16,29 @@ use aws_sdk_bedrockruntime::{
         ToolResultStatus, ToolSpecification, ToolUseBlock,
     },
 };
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use aws_smithy_types::{Document, Number};
 use std::collections::HashMap;
+
+struct ConverseOptions {
+    tools: Option<Vec<ToolSpec>>,
+    structured_output: Option<StructuredOutputSchema>,
+}
+
+struct ConverseResult {
+    text_blocks: Vec<String>,
+    tool_calls: Vec<ToolCall>,
+}
+
+impl ConverseResult {
+    fn plain_text(&self) -> String {
+        self.text_blocks.join("\n")
+    }
+
+    fn structured_text(&self) -> String {
+        self.text_blocks.join("")
+    }
+}
 
 #[derive(Clone)]
 pub struct BedrockLlmProvider {
@@ -36,8 +60,14 @@ impl BedrockLlmProvider {
         &self,
         messages: Vec<Message>,
         model: &str,
-        tools: Option<Vec<ToolSpec>>,
-    ) -> Result<LlmResponse, LlmClientError> {
+        options: ConverseOptions,
+    ) -> Result<ConverseResult, LlmClientError> {
+        if options.tools.is_some() && options.structured_output.is_some() {
+            return Err(LlmClientError::RequestBuild(
+                "Combining tools and structured output is not supported yet".to_string(),
+            ));
+        }
+
         let system_blocks = build_system_content_blocks(&messages)?;
 
         let message_blocks = build_content_block(&messages)?;
@@ -52,14 +82,21 @@ impl BedrockLlmProvider {
             req = req.system(block);
         }
 
-        if let Some(tools) = tools.as_ref().filter(|tools| !tools.is_empty()) {
+        if let Some(tools) = options.tools.as_ref().filter(|tools| !tools.is_empty()) {
             req = req.tool_config(tool_configuration(tools)?);
         }
 
-        let output = req
-            .send()
-            .await
-            .map_err(|e| LlmClientError::ApiCall(format!("Bedrock converse error: {}", e)))?;
+        if let Some(schema) = options.structured_output.as_ref() {
+            req = req.output_config(structured_output_config(schema)?);
+        }
+
+        let output = req.send().await.map_err(|e| {
+            let code = e.code().unwrap_or("unknown");
+            let message = e.message().unwrap_or("no message");
+            LlmClientError::ApiCall(format!(
+                "Bedrock converse error: code={code}, message={message}, debug={e:?}"
+            ))
+        })?;
 
         let output_blocks = output
             .output()
@@ -75,12 +112,12 @@ impl BedrockLlmProvider {
             .content();
 
         // LLM response
-        let mut text_parts = Vec::new();
+        let mut text_blocks = Vec::new();
         let mut tool_calls = Vec::new();
 
         for block in output_blocks {
             if let Ok(text) = block.as_text() {
-                text_parts.push(text.to_string());
+                text_blocks.push(text.to_string());
                 continue;
             }
 
@@ -93,8 +130,8 @@ impl BedrockLlmProvider {
             }
         }
 
-        Ok(LlmResponse {
-            text: text_parts.join("\n"),
+        Ok(ConverseResult {
+            text_blocks,
             tool_calls,
         })
     }
@@ -107,7 +144,17 @@ impl LlmProvider for BedrockLlmProvider {
         messages: Vec<Message>,
         model: &str,
     ) -> Result<String, LlmClientError> {
-        Ok(self.converse(messages, model, None).await?.text)
+        Ok(self
+            .converse(
+                messages,
+                model,
+                ConverseOptions {
+                    tools: None,
+                    structured_output: None,
+                },
+            )
+            .await?
+            .plain_text())
     }
 
     async fn response_with_tool(
@@ -116,7 +163,41 @@ impl LlmProvider for BedrockLlmProvider {
         tools: Vec<ToolSpec>,
         model: &str,
     ) -> Result<LlmResponse, LlmClientError> {
-        self.converse(messages, model, Some(tools)).await
+        let result = self
+            .converse(
+                messages,
+                model,
+                ConverseOptions {
+                    tools: Some(tools),
+                    structured_output: None,
+                },
+            )
+            .await?;
+        Ok(LlmResponse {
+            text: result.plain_text(),
+            tool_calls: result.tool_calls,
+        })
+    }
+
+    async fn response_with_structure(
+        &self,
+        messages: Vec<Message>,
+        schema: StructuredOutputSchema,
+        model: &str,
+    ) -> Result<serde_json::Value, LlmClientError> {
+        let result = self
+            .converse(
+                messages,
+                model,
+                ConverseOptions {
+                    tools: None,
+                    structured_output: Some(schema),
+                },
+            )
+            .await?;
+        serde_json::from_str(result.structured_text().trim()).map_err(|e| {
+            LlmClientError::ResponseParse(format!("Failed to parse structured output JSON: {e}"))
+        })
     }
 }
 
@@ -318,4 +399,27 @@ fn json_to_document(value: &serde_json::Value) -> Result<Document, LlmClientErro
         serde_json::Value::Bool(value) => Ok(Document::Bool(*value)),
         serde_json::Value::Null => Ok(Document::Null),
     }
+}
+
+/// Converts a StructuredOutputSchema to a Bedrock OutputConfig.
+fn structured_output_config(
+    schema: &StructuredOutputSchema,
+) -> Result<OutputConfig, LlmClientError> {
+    let schema_string = serde_json::to_string(&schema.schema)
+        .map_err(|e| LlmClientError::RequestBuild(format!("Invalid JSON schema: {e}")))?;
+
+    let json_schema = JsonSchemaDefinition::builder()
+        .name(schema.name.clone())
+        .set_description(schema.description.clone())
+        .schema(schema_string)
+        .build()
+        .map_err(|e| LlmClientError::RequestBuild(format!("Failed to build JSON schema: {e}")))?;
+
+    let text_format = OutputFormat::builder()
+        .r#type(OutputFormatType::JsonSchema)
+        .structure(OutputFormatStructure::JsonSchema(json_schema))
+        .build()
+        .map_err(|e| LlmClientError::RequestBuild(format!("Failed to build output format: {e}")))?;
+
+    Ok(OutputConfig::builder().text_format(text_format).build())
 }

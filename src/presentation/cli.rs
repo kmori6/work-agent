@@ -1,4 +1,5 @@
 pub mod agent_cli;
+pub mod research_cli;
 
 use clap::{Parser, Subcommand};
 
@@ -11,4 +12,5 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     Agent,
+    Research,
 }
