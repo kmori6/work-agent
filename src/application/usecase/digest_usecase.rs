@@ -8,6 +8,8 @@ const MODEL: &str = "global.anthropic.claude-haiku-4-5-20251001-v1:0";
 
 const TRANSLATE_PROMPT: &str = "\
 Translate the following Markdown document into Japanese. \
+For each paper's body text (the paragraph below the URL), condense it into 3-4 sentences \
+following this structure: background → problem → proposed approach → results. \
 Keep all Markdown formatting (headings, URLs, horizontal rules) intact. \
 Output only the translated Markdown, with no additional commentary.";
 
@@ -60,10 +62,10 @@ impl<L: LlmProvider> DigestUsecase<L> {
         let report = self
             .llm_provider
             .response(
-                vec![Message::text(
-                    Role::User,
-                    format!("{TRANSLATE_PROMPT}\n\n{english_report}"),
-                )],
+                vec![
+                    Message::text(Role::System, TRANSLATE_PROMPT),
+                    Message::text(Role::User, english_report),
+                ],
                 MODEL,
             )
             .await
