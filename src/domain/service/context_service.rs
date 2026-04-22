@@ -16,11 +16,6 @@ pub struct ContextService<L> {
     compaction_threshold_percent: u64,
 }
 
-pub struct ContextBuildResult {
-    pub messages: Vec<Message>,
-    pub compacted: bool,
-}
-
 impl<L: LlmProvider> ContextService<L> {
     pub fn new(llm_provider: L) -> Self {
         Self {
@@ -49,22 +44,14 @@ impl<L: LlmProvider> ContextService<L> {
         &self,
         history: Vec<Message>,
         latest_usage: Option<TokenUsage>,
-    ) -> Result<ContextBuildResult, AgentError> {
+    ) -> Result<Vec<Message>, AgentError> {
         let input_tokens = latest_usage.map_or(0, |usage| usage.input_tokens);
 
         if !self.should_compact(input_tokens) {
-            return Ok(ContextBuildResult {
-                messages: history,
-                compacted: false,
-            });
+            return Ok(history);
         }
 
-        let messages = self.compact_messages(history).await?;
-
-        Ok(ContextBuildResult {
-            messages,
-            compacted: true,
-        })
+        self.compact_messages(history).await
     }
 
     pub fn context_window_tokens(&self) -> u64 {
@@ -79,7 +66,7 @@ impl<L: LlmProvider> ContextService<L> {
         input_tokens.saturating_mul(100) / self.context_window_tokens
     }
 
-    pub fn should_compact(&self, input_tokens: u64) -> bool {
+    fn should_compact(&self, input_tokens: u64) -> bool {
         self.percent_used(input_tokens) >= self.compaction_threshold_percent
     }
 

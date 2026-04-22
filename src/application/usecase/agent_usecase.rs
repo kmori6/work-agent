@@ -109,7 +109,7 @@ where
             .find_latest_for_session(input.session_id)
             .await?;
 
-        let context = self
+        let context_messages = self
             .context_service
             .build_context(history, last_usage)
             .await?;
@@ -130,10 +130,10 @@ where
 
         let result = self
             .agent_service
-            .run(context.messages, user_message, tx)
+            .run(context_messages, user_message, tx)
             .await?;
 
-        let context_input_tokens = result.last_usage.input_tokens;
+        let context_input_tokens = result.last_input_tokens;
         let context_window_tokens = self.context_service.context_window_tokens();
         let context_percent_used = self.context_service.percent_used(context_input_tokens);
 

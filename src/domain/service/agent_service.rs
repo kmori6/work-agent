@@ -36,7 +36,7 @@ pub struct AgentResult {
     pub final_text: String,
     pub messages: Vec<AgentTurnMessage>,
     pub usage: TokenUsage,
-    pub last_usage: TokenUsage,
+    pub last_input_tokens: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -120,7 +120,7 @@ impl<L: LlmProvider> AgentService<L> {
                     final_text,
                     messages: turn_messages,
                     usage,
-                    last_usage: response.usage,
+                    last_input_tokens: response.usage.input_tokens,
                 });
             }
 

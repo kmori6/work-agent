@@ -3,7 +3,6 @@ use crate::application::usecase::agent_usecase::{
 };
 use crate::domain::model::attachment::Attachment;
 use crate::domain::model::chat_session::ChatSession;
-use crate::domain::model::token_usage::TokenUsage;
 use crate::domain::port::llm_provider::LlmProvider;
 use crate::domain::repository::chat_message_repository::ChatMessageRepository;
 use crate::domain::repository::chat_session_repository::ChatSessionRepository;
@@ -314,36 +313,23 @@ where
 }
 
 fn print_agent_output(output: HandleAgentOutput) {
-    for event in output.reply {
+    for event in &output.reply {
         match event {
-            AgentEvent::AssistantMessage(message) => print_text(&message),
+            AgentEvent::AssistantMessage(message) => print_text(message),
         }
     }
 
-    print_token_usage(
-        output.usage,
+    print_token_usage(&output);
+}
+
+fn print_token_usage(output: &HandleAgentOutput) {
+    println!(
+        "[tokens] input={} output={} | context={}/{} ({}%)",
+        output.usage.input_tokens,
+        output.usage.output_tokens,
         output.context_input_tokens,
         output.context_window_tokens,
         output.context_percent_used,
-    );
-}
-
-fn print_token_usage(
-    usage: TokenUsage,
-    context_input_tokens: u64,
-    context_window_tokens: u64,
-    context_percent_used: u64,
-) {
-    println!(
-        "[tokens] input={} output={} total={} cache_read={} cache_write={} context={}/{} ({}%)",
-        usage.input_tokens,
-        usage.output_tokens,
-        usage.total_tokens(),
-        usage.cache_read_tokens,
-        usage.cache_write_tokens,
-        context_input_tokens,
-        context_window_tokens,
-        context_percent_used,
     );
 }
 
