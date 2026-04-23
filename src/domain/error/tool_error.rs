@@ -2,6 +2,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ToolError {
+    #[error("unknown tool: {0}")]
+    UnknownTool(String),
+
     #[error("invalid tool arguments: {0}")]
     InvalidArguments(String),
 

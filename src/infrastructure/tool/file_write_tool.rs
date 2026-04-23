@@ -1,6 +1,6 @@
 use crate::domain::error::tool_error::ToolError;
 use crate::domain::model::tool::ToolExecutionResult;
-use crate::domain::port::tool::Tool;
+use crate::domain::port::tool::{Tool, ToolExecutionPolicy};
 use crate::infrastructure::util::path::{contains_parent_dir, normalize_path};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -81,6 +81,10 @@ impl Tool for FileWriteTool {
           },
           "required": ["path", "content"]
         })
+    }
+
+    fn execution_policy(&self, _arguments: &Value) -> ToolExecutionPolicy {
+        ToolExecutionPolicy::Ask
     }
 
     async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError> {

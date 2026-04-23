@@ -6,6 +6,7 @@ use commander::domain::service::tool_service::ToolExecutor;
 use commander::infrastructure::persistence::postgres_chat_message_repository::PostgresChatMessageRepository;
 use commander::infrastructure::persistence::postgres_chat_session_repository::PostgresChatSessionRepository;
 use commander::infrastructure::persistence::postgres_token_usage_repository::PostgresTokenUsageRepository;
+use commander::infrastructure::persistence::postgres_tool_approval_repository::PostgresToolApprovalRepository;
 use commander::infrastructure::search::tavily_search_provider::TavilySearchProvider;
 use commander::infrastructure::tool::asr_tool::AsrTool;
 use commander::infrastructure::tool::file_edit_tool::FileEditTool;
@@ -69,7 +70,8 @@ async fn main() -> Result<(), AgentCliError> {
 
             let chat_session_repository = PostgresChatSessionRepository::new(pool.clone());
             let chat_message_repository = PostgresChatMessageRepository::new(pool.clone());
-            let token_usage_repository = PostgresTokenUsageRepository::new(pool);
+            let token_usage_repository = PostgresTokenUsageRepository::new(pool.clone());
+            let tool_approval_repository = PostgresToolApprovalRepository::new(pool);
 
             let usecase = AgentUsecase::new(
                 agent_service,
@@ -77,6 +79,7 @@ async fn main() -> Result<(), AgentCliError> {
                 chat_session_repository,
                 chat_message_repository,
                 token_usage_repository,
+                tool_approval_repository,
             );
 
             agent_cli::run(&usecase).await?;

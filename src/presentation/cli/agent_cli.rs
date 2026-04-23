@@ -7,6 +7,7 @@ use crate::domain::port::llm_provider::LlmProvider;
 use crate::domain::repository::chat_message_repository::ChatMessageRepository;
 use crate::domain::repository::chat_session_repository::ChatSessionRepository;
 use crate::domain::repository::token_usage_repository::TokenUsageRepository;
+use crate::domain::repository::tool_approval_repository::ToolApprovalRepository;
 use crate::domain::service::agent_service::AgentProgressEvent;
 use crate::presentation::error::agent_cli_error::AgentCliError;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -23,12 +24,13 @@ use uuid::Uuid;
 const MAX_ARGUMENT_PREVIEW_CHARS: usize = 800;
 const SESSION_LIST_LIMIT: usize = 10;
 
-pub async fn run<L, S, M, T>(usecase: &AgentUsecase<L, S, M, T>) -> Result<(), AgentCliError>
+pub async fn run<L, S, M, T, A>(usecase: &AgentUsecase<L, S, M, T, A>) -> Result<(), AgentCliError>
 where
     L: LlmProvider,
     S: ChatSessionRepository,
     M: ChatMessageRepository,
     T: TokenUsageRepository,
+    A: ToolApprovalRepository,
 {
     println!("Agent CLI");
     println!("type /help for commands");
@@ -63,6 +65,13 @@ where
                     current_session = session;
                     print_current_session(current_session.id);
                 }
+            }
+            CliCommand::Approve => {
+                handle_approval(usecase, current_session.id).await?;
+            }
+            CliCommand::Deny => {
+                let output = usecase.deny_approval(current_session.id).await?;
+                print_agent_output(output);
             }
             CliCommand::Exit => break,
             CliCommand::Unknown(name) => println!("unknown command: {name}"),
@@ -116,6 +125,8 @@ enum CliCommand {
     NewSession,
     Sessions,
     Use(String),
+    Approve,
+    Deny,
     Exit,
     Unknown(String),
     UserMessage(String),
@@ -235,6 +246,8 @@ fn parse_command(line: String) -> Option<CliCommand> {
         "/help" => CliCommand::Help,
         "/reset" | "/new" => CliCommand::NewSession,
         "/sessions" => CliCommand::Sessions,
+        "/approve" => CliCommand::Approve,
+        "/deny" => CliCommand::Deny,
         "/exit" | "/quit" => CliCommand::Exit,
         _ if input.starts_with("/use ") => {
             CliCommand::Use(input.trim_start_matches("/use ").trim().to_string())
@@ -251,8 +264,8 @@ fn parse_command(line: String) -> Option<CliCommand> {
     })
 }
 
-async fn switch_session<L, S, M, T>(
-    usecase: &AgentUsecase<L, S, M, T>,
+async fn switch_session<L, S, M, T, A>(
+    usecase: &AgentUsecase<L, S, M, T, A>,
     raw_id: &str,
 ) -> Result<Option<ChatSession>, AgentCliError>
 where
@@ -260,6 +273,7 @@ where
     S: ChatSessionRepository,
     M: ChatMessageRepository,
     T: TokenUsageRepository,
+    A: ToolApprovalRepository,
 {
     let Ok(session_id) = Uuid::parse_str(raw_id) else {
         println!("invalid session id: {raw_id}");
@@ -275,8 +289,8 @@ where
     }
 }
 
-async fn handle_user_message<L, S, M, T>(
-    usecase: &AgentUsecase<L, S, M, T>,
+async fn handle_user_message<L, S, M, T, A>(
+    usecase: &AgentUsecase<L, S, M, T, A>,
     session_id: Uuid,
     message: String,
     attachments: Vec<Attachment>,
@@ -286,6 +300,7 @@ where
     S: ChatSessionRepository,
     M: ChatMessageRepository,
     T: TokenUsageRepository,
+    A: ToolApprovalRepository,
 {
     let mut reporter = CliProgressReporter::new();
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
@@ -312,10 +327,47 @@ where
     Ok(())
 }
 
+async fn handle_approval<L, S, M, T, A>(
+    usecase: &AgentUsecase<L, S, M, T, A>,
+    session_id: Uuid,
+) -> Result<(), AgentCliError>
+where
+    L: LlmProvider,
+    S: ChatSessionRepository,
+    M: ChatMessageRepository,
+    T: TokenUsageRepository,
+    A: ToolApprovalRepository,
+{
+    let mut reporter = CliProgressReporter::new();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+
+    let (output_result, _) = tokio::join!(usecase.approve_approval(session_id, tx), async {
+        while let Some(event) = rx.recv().await {
+            reporter.handle(event);
+        }
+    },);
+
+    reporter.finish();
+    print_agent_output(output_result?);
+
+    Ok(())
+}
+
 fn print_agent_output(output: HandleAgentOutput) {
-    for event in &output.reply {
+    for event in &output.events {
         match event {
             AgentEvent::AssistantMessage(message) => print_text(message),
+            AgentEvent::ToolConfirmationRequested {
+                call_id,
+                tool_name,
+                arguments,
+                policy,
+            } => {
+                println!("[confirmation requested] {tool_name} ({call_id})");
+                println!("policy: {policy:?}");
+                println!("{}", format_arguments(arguments));
+                println!("Run /approve to execute, or /deny to cancel.");
+            }
         }
     }
 
@@ -376,6 +428,8 @@ fn print_help() {
     println!("/reset     alias of /new");
     println!("/sessions  show recent sessions");
     println!("/use <id>  switch to a session");
+    println!("/approve   approve pending tool execution");
+    println!("/deny      deny pending tool execution");
     println!("/exit      quit");
 }
 

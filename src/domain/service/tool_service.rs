@@ -1,6 +1,7 @@
-use crate::domain::model::tool::{ToolCall, ToolExecutionResult, ToolResultMessage, ToolSpec};
+use crate::domain::error::tool_error::ToolError;
+use crate::domain::model::tool::{ToolCall, ToolExecutionResult, ToolSpec};
 use crate::domain::port::tool::Tool;
-use serde_json::json;
+use crate::domain::port::tool::ToolExecutionPolicy;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -17,24 +18,24 @@ impl ToolExecutor {
         self.tools.iter().map(|tool| tool.spec()).collect()
     }
 
-    pub async fn execute(&self, call: ToolCall) -> ToolResultMessage {
-        let Some(tool) = self.tools.iter().find(|tool| tool.name() == call.name) else {
-            return ToolResultMessage::from_execution(
-                call.id,
-                ToolExecutionResult::error(json!({
-                    "message": format!("unknown tool: {}", call.name)
-                })),
-            );
-        };
+    pub fn check_execution_policy(
+        &self,
+        call: &ToolCall,
+    ) -> Result<ToolExecutionPolicy, ToolError> {
+        self.tools
+            .iter()
+            .find(|tool| tool.name() == call.name)
+            .map(|tool| tool.execution_policy(&call.arguments))
+            .ok_or_else(|| ToolError::UnknownTool(call.name.clone()))
+    }
 
-        match tool.execute(call.arguments).await {
-            Ok(result) => ToolResultMessage::from_execution(call.id, result),
-            Err(err) => ToolResultMessage::from_execution(
-                call.id,
-                ToolExecutionResult::error(json!({
-                    "message": err.to_string()
-                })),
-            ),
-        }
+    pub async fn execute(&self, call: ToolCall) -> Result<ToolExecutionResult, ToolError> {
+        let tool = self
+            .tools
+            .iter()
+            .find(|tool| tool.name() == call.name)
+            .ok_or_else(|| ToolError::UnknownTool(call.name.clone()))?;
+
+        tool.execute(call.arguments).await
     }
 }

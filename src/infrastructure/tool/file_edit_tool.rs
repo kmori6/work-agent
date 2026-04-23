@@ -1,6 +1,6 @@
 use crate::domain::error::tool_error::ToolError;
 use crate::domain::model::tool::ToolExecutionResult;
-use crate::domain::port::tool::Tool;
+use crate::domain::port::tool::{Tool, ToolExecutionPolicy};
 use crate::infrastructure::util::path::{normalize_path, read_workspace_text_file};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -59,6 +59,10 @@ impl Tool for FileEditTool {
             },
             "required": ["path", "old_text", "new_text"]
         })
+    }
+
+    fn execution_policy(&self, _arguments: &Value) -> ToolExecutionPolicy {
+        ToolExecutionPolicy::Ask
     }
 
     async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError> {
