@@ -23,6 +23,7 @@ use commander::{
     application::usecase::{
         agent_usecase::AgentUsecase, digest_usecase::DigestUsecase,
         research_usecase::ResearchUsecase, survey_usecase::SurveyUsecase,
+        tool_execution_rule_usecase::ToolExecutionRuleUsecase,
     },
     infrastructure::llm::bedrock_llm_provider::BedrockLlmProvider,
     presentation::{
@@ -73,7 +74,10 @@ async fn main() -> Result<(), AgentCliError> {
             let chat_message_repository = PostgresChatMessageRepository::new(pool.clone());
             let token_usage_repository = PostgresTokenUsageRepository::new(pool.clone());
             let tool_approval_repository = PostgresToolApprovalRepository::new(pool.clone());
-            let tool_execution_rule_repository = PostgresToolExecutionRuleRepository::new(pool);
+            let tool_execution_rule_repository =
+                PostgresToolExecutionRuleRepository::new(pool.clone());
+            let tool_execution_rule_usecase =
+                ToolExecutionRuleUsecase::new(tool_execution_rule_repository.clone());
 
             let usecase = AgentUsecase::new(
                 agent_service,
@@ -85,7 +89,7 @@ async fn main() -> Result<(), AgentCliError> {
                 tool_execution_rule_repository,
             );
 
-            agent_cli::run(&usecase).await?;
+            agent_cli::run(&usecase, &tool_execution_rule_usecase).await?;
         }
         Commands::Research => {
             info!("Starting research...");

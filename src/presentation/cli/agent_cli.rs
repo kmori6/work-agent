@@ -1,8 +1,10 @@
 use crate::application::usecase::agent_usecase::{
     AgentEvent, AgentUsecase, HandleAgentInput, HandleAgentOutput,
 };
+use crate::application::usecase::tool_execution_rule_usecase::ToolExecutionRuleUsecase;
 use crate::domain::model::attachment::Attachment;
 use crate::domain::model::chat_session::ChatSession;
+use crate::domain::model::tool_execution_rule::{ToolExecutionRule, ToolExecutionRuleAction};
 use crate::domain::port::llm_provider::LlmProvider;
 use crate::domain::repository::chat_message_repository::ChatMessageRepository;
 use crate::domain::repository::chat_session_repository::ChatSessionRepository;
@@ -25,8 +27,9 @@ use uuid::Uuid;
 const MAX_ARGUMENT_PREVIEW_CHARS: usize = 800;
 const SESSION_LIST_LIMIT: usize = 10;
 
-pub async fn run<L, S, M, T, A, R>(
+pub async fn run<L, S, M, T, A, R, TR>(
     usecase: &AgentUsecase<L, S, M, T, A, R>,
+    tool_execution_rule_usecase: &ToolExecutionRuleUsecase<TR>,
 ) -> Result<(), AgentCliError>
 where
     L: LlmProvider,
@@ -35,6 +38,7 @@ where
     T: TokenUsageRepository,
     A: ToolApprovalRepository,
     R: ToolExecutionRuleRepository,
+    TR: ToolExecutionRuleRepository,
 {
     println!("Agent CLI");
     println!("type /help for commands");
@@ -77,6 +81,18 @@ where
                 let output = usecase.deny_approval(current_session.id).await?;
                 print_agent_output(output);
             }
+            CliCommand::ToolRules => {
+                let rules = tool_execution_rule_usecase.list().await?;
+                print_tool_execution_rules(&rules);
+            }
+            CliCommand::SetToolRule { tool_name, action } => {
+                let action_text = action.as_str();
+                tool_execution_rule_usecase
+                    .set(tool_name.clone(), action)
+                    .await?;
+                println!("tool rule saved: {tool_name} -> {action_text}");
+            }
+            CliCommand::Invalid(message) => println!("{message}"),
             CliCommand::Exit => break,
             CliCommand::Unknown(name) => println!("unknown command: {name}"),
             CliCommand::UserMessage(message) => {
@@ -131,6 +147,12 @@ enum CliCommand {
     Use(String),
     Approve,
     Deny,
+    ToolRules,
+    SetToolRule {
+        tool_name: String,
+        action: ToolExecutionRuleAction,
+    },
+    Invalid(String),
     Exit,
     Unknown(String),
     UserMessage(String),
@@ -252,10 +274,13 @@ fn parse_command(line: String) -> Option<CliCommand> {
         "/sessions" => CliCommand::Sessions,
         "/approve" => CliCommand::Approve,
         "/deny" => CliCommand::Deny,
+        "/tool-rules" => CliCommand::ToolRules,
+        "/tool-rule" => invalid_tool_rule_command(),
         "/exit" | "/quit" => CliCommand::Exit,
         _ if input.starts_with("/use ") => {
             CliCommand::Use(input.trim_start_matches("/use ").trim().to_string())
         }
+        _ if input.starts_with("/tool-rule ") => parse_tool_rule_command(input),
         _ if input.starts_with('/') => CliCommand::Unknown(input.to_string()),
         _ => {
             let (text, attachments) = parse_attachments(input);
@@ -266,6 +291,27 @@ fn parse_command(line: String) -> Option<CliCommand> {
             }
         }
     })
+}
+
+fn parse_tool_rule_command(input: &str) -> CliCommand {
+    let parts = input.split_whitespace().collect::<Vec<_>>();
+
+    if parts.len() != 3 {
+        return invalid_tool_rule_command();
+    }
+
+    let Some(action) = ToolExecutionRuleAction::from_str(parts[2]) else {
+        return invalid_tool_rule_command();
+    };
+
+    CliCommand::SetToolRule {
+        tool_name: parts[1].to_string(),
+        action,
+    }
+}
+
+fn invalid_tool_rule_command() -> CliCommand {
+    CliCommand::Invalid("usage: /tool-rule <tool_name> <allow|ask|deny>".to_string())
 }
 
 async fn switch_session<L, S, M, T, A, R>(
@@ -415,6 +461,17 @@ fn print_sessions(sessions: &[ChatSession], current_session_id: Uuid) {
     }
 }
 
+fn print_tool_execution_rules(rules: &[ToolExecutionRule]) {
+    if rules.is_empty() {
+        println!("no tool execution rules");
+        return;
+    }
+
+    for rule in rules {
+        println!("{} -> {}", rule.tool_name, rule.action.as_str());
+    }
+}
+
 fn format_arguments(arguments: &Value) -> String {
     let pretty = serde_json::to_string_pretty(arguments).unwrap_or_else(|_| arguments.to_string());
     truncate_for_cli(pretty, MAX_ARGUMENT_PREVIEW_CHARS)
@@ -437,6 +494,8 @@ fn print_help() {
     println!("/use <id>  switch to a session");
     println!("/approve   approve pending tool execution");
     println!("/deny      deny pending tool execution");
+    println!("/tool-rules  show tool approval rules");
+    println!("/tool-rule <tool> <allow|ask|deny>  set tool approval rule");
     println!("/exit      quit");
 }
 
