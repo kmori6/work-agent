@@ -117,7 +117,7 @@ fn read_repl_line(
     match signal {
         Signal::Success(line) | Signal::ExternalBreak(line) => Ok(Some(line)),
         Signal::CtrlC => {
-            println!();
+            println!("^C");
             Ok(Some(String::new()))
         }
         Signal::CtrlD => Ok(None),

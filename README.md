@@ -54,10 +54,13 @@ commander agent
 | `/deny`                                | Deny pending tool execution    |
 | `/tool-rules`                          | Show tool approval rules       |
 | `/tool-rule <tool> <allow\|ask\|deny>` | Set tool approval rule         |
+| `/attach <files...>`                   | Stage files to attach          |
+| `/detach <files...>`                   | Remove files from staging      |
+| `/attachments`                         | Show staged files              |
 | `/help`                                | Show help                      |
 | `/exit`                                | Quit                           |
 
-Attach files to a message with `@path/to/file`.
+Files can also be staged by dragging and dropping them onto the terminal window (bracketed paste).
 
 ### Research
 
