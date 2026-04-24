@@ -1,7 +1,5 @@
 # Agent Sequence Diagrams
 
-This document shows the current Commander agent sequence flows.
-
 ## Normal Message Flow
 
 ```mermaid

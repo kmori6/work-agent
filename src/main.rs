@@ -1,41 +1,39 @@
+use std::{env, sync::Arc};
+
 use clap::Parser;
-use commander::domain::service::agent_service::AgentService;
-use commander::domain::service::context_service::ContextService;
-use commander::domain::service::deep_research_service::DeepResearchService;
-use commander::domain::service::tool_service::ToolExecutor;
-use commander::infrastructure::persistence::postgres_chat_message_repository::PostgresChatMessageRepository;
-use commander::infrastructure::persistence::postgres_chat_session_repository::PostgresChatSessionRepository;
-use commander::infrastructure::persistence::postgres_token_usage_repository::PostgresTokenUsageRepository;
-use commander::infrastructure::persistence::postgres_tool_approval_repository::PostgresToolApprovalRepository;
-use commander::infrastructure::persistence::postgres_tool_execution_rule_repository::PostgresToolExecutionRuleRepository;
-use commander::infrastructure::search::tavily_search_provider::TavilySearchProvider;
-use commander::infrastructure::tool::asr_tool::AsrTool;
-use commander::infrastructure::tool::file_edit_tool::FileEditTool;
-use commander::infrastructure::tool::file_read_tool::FileReadTool;
-use commander::infrastructure::tool::file_search_tool::FileSearchTool;
-use commander::infrastructure::tool::file_write_tool::FileWriteTool;
-use commander::infrastructure::tool::ocr_tool::OcrTool;
-use commander::infrastructure::tool::shell_exec_tool::ShellExecTool;
-use commander::infrastructure::tool::text_search_tool::TextSearchTool;
-use commander::infrastructure::tool::web_fetch_tool::WebFetchTool;
-use commander::infrastructure::tool::web_search_tool::WebSearchTool;
-use commander::{
-    application::usecase::{
-        agent_usecase::AgentUsecase, digest_usecase::DigestUsecase,
-        research_usecase::ResearchUsecase, survey_usecase::SurveyUsecase,
-        tool_execution_rule_usecase::ToolExecutionRuleUsecase,
-    },
-    infrastructure::llm::bedrock_llm_provider::BedrockLlmProvider,
-    presentation::{
-        cli::{Cli, Commands, agent_cli, digest_cli, research_cli, survey_cli},
-        error::agent_cli_error::AgentCliError,
-    },
-};
 use dotenvy::dotenv;
 use log::info;
 use sqlx::PgPool;
-use std::env;
-use std::sync::Arc;
+
+use commander::application::usecase::{
+    agent_usecase::AgentUsecase, digest_usecase::DigestUsecase, research_usecase::ResearchUsecase,
+    survey_usecase::SurveyUsecase, tool_execution_rule_usecase::ToolExecutionRuleUsecase,
+};
+use commander::domain::service::{
+    agent_service::AgentService, context_service::ContextService,
+    deep_research_service::DeepResearchService, tool_service::ToolExecutor,
+};
+use commander::infrastructure::{
+    llm::bedrock_llm_provider::BedrockLlmProvider,
+    persistence::{
+        postgres_chat_message_repository::PostgresChatMessageRepository,
+        postgres_chat_session_repository::PostgresChatSessionRepository,
+        postgres_token_usage_repository::PostgresTokenUsageRepository,
+        postgres_tool_approval_repository::PostgresToolApprovalRepository,
+        postgres_tool_execution_rule_repository::PostgresToolExecutionRuleRepository,
+    },
+    search::tavily_search_provider::TavilySearchProvider,
+    tool::{
+        asr_tool::AsrTool, file_edit_tool::FileEditTool, file_read_tool::FileReadTool,
+        file_search_tool::FileSearchTool, file_write_tool::FileWriteTool, ocr_tool::OcrTool,
+        shell_exec_tool::ShellExecTool, text_search_tool::TextSearchTool,
+        web_fetch_tool::WebFetchTool, web_search_tool::WebSearchTool,
+    },
+};
+use commander::presentation::{
+    cli::{Cli, Commands, agent_cli, digest_cli, research_cli, survey_cli},
+    error::agent_cli_error::AgentCliError,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), AgentCliError> {

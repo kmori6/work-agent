@@ -1,125 +1,78 @@
 # Database
 
-This document is a short memo for the current database layout in `commander`.
+PostgreSQL database name: `agent`.
 
-## Overview
-
-- PostgreSQL database name: `agent`
-- Admin migrations: [`db/migration/admin`](../db/migration/admin)
-- Application migrations: [`db/migration/agent`](../db/migration/agent)
-
-`admin` is for PostgreSQL-level setup such as creating the `agent` database.
-`agent` is for tables and indexes inside the `agent` database.
+- Admin migrations (DB-level setup): [`db/migration/admin`](../db/migration/admin)
+- Application migrations (tables/indexes): [`db/migration/agent`](../db/migration/agent)
 
 ## Tables
 
 ### `chat_sessions`
 
-- One row per chat session
-- Primary key: `id UUID`
-- Timestamps:
-  - `created_at`
-  - `updated_at`
+One row per conversation thread.
 
-This table is the container for a conversation thread.
+| Column       | Type      | Description        |
+| ------------ | --------- | ------------------ |
+| `id`         | UUID PK   | Session identifier |
+| `created_at` | timestamp |                    |
+| `updated_at` | timestamp |                    |
 
 ### `chat_messages`
 
-- One row per message in a session
-- Primary key: `id UUID`
-- Foreign key: `session_id -> chat_sessions.id`
-- Core fields:
-  - `role`
-  - `kind`
-  - `text`
-  - `payload`
-  - `created_at`
+Ordered message history for a session.
 
-This table stores the ordered message history for a session.
-`kind` separates plain text from tool-related messages.
-`payload` stores structured tool data as `JSONB` when needed.
-
-Message kinds:
-
-- `text`
-  - Normal system, user, or assistant text.
-- `tool_call`
-  - Assistant message containing one or more tool calls returned by the LLM.
-- `tool_results`
-  - Tool result message returned to the LLM. This can include successful tool
-    results, execution errors, blocked tool calls, denied tool calls, or skipped
-    tool calls.
+| Column       | Type                      | Description                           |
+| ------------ | ------------------------- | ------------------------------------- |
+| `id`         | UUID PK                   |                                       |
+| `session_id` | UUID FK → `chat_sessions` |                                       |
+| `role`       | text                      | `system` / `user` / `assistant`       |
+| `kind`       | text                      | `text` / `tool_call` / `tool_results` |
+| `text`       | text                      | Message text                          |
+| `payload`    | JSONB                     | Structured tool data                  |
+| `created_at` | timestamp                 |                                       |
 
 ### `token_usages`
 
-- One row per recorded LLM usage event
-- Primary key: `id UUID`
-- Foreign key: `message_id -> chat_messages.id`
-- Core fields:
-  - `model`
-  - `input_tokens`
-  - `output_tokens`
-  - `cache_read_tokens`
-  - `cache_write_tokens`
-  - `created_at`
+Token consumption per LLM call. Used for context management and usage tracking.
 
-This table stores usage metadata for messages produced by LLM calls.
-It is used by context management and cost/usage tracking.
+| Column               | Type                      | Description |
+| -------------------- | ------------------------- | ----------- |
+| `id`                 | UUID PK                   |             |
+| `message_id`         | UUID FK → `chat_messages` |             |
+| `model`              | text                      |             |
+| `input_tokens`       | int                       |             |
+| `output_tokens`      | int                       |             |
+| `cache_read_tokens`  | int                       |             |
+| `cache_write_tokens` | int                       |             |
+| `created_at`         | timestamp                 |             |
 
 ### `tool_call_approvals`
 
-- One row per explicit user approval or denial decision
-- Primary key: `id UUID`
-- Foreign key: `session_id -> chat_sessions.id`
-- Core fields:
-  - `tool_call_id`
-  - `tool_name`
-  - `arguments`
-  - `decision`
-  - `decided_at`
+Audit log of user approval/denial decisions for tool calls.
 
-`decision` is constrained to:
-
-- `approved`
-- `denied`
-
-This table is an audit log for user decisions about tool execution.
-It does not represent the current execution policy for a tool. It records what
-the user decided for a specific tool call at a specific point in a session.
+| Column         | Type                      | Description           |
+| -------------- | ------------------------- | --------------------- |
+| `id`           | UUID PK                   |                       |
+| `session_id`   | UUID FK → `chat_sessions` |                       |
+| `tool_call_id` | text                      |                       |
+| `tool_name`    | text                      |                       |
+| `arguments`    | JSONB                     |                       |
+| `decision`     | text                      | `approved` / `denied` |
+| `decided_at`   | timestamp                 |                       |
 
 ### `tool_execution_rules`
 
-- One row per persisted tool execution rule
-- Primary key: `id UUID`
-- Unique key: `tool_name`
-- Core fields:
-  - `tool_name`
-  - `action`
-  - `created_at`
-  - `updated_at`
+Persisted per-tool execution rules. Combined with each tool's default policy to produce the final execution decision.
 
-`action` is constrained to:
-
-- `allow`
-- `ask`
-- `deny`
-
-This table stores the current default execution rule for a tool name.
-The domain model combines this persisted action with the tool's own
-`ToolExecutionPolicy` to produce a final `ToolExecutionDecision`.
-
-Important behavior:
-
-- `deny` blocks execution and returns an error tool result to the LLM.
-- `ask` pauses the agent loop and requests user approval.
-- `allow` lets the tool run automatically unless the tool declares
-  `ConfirmEveryTime`.
-- `ConfirmEveryTime` remains approval-gated even when the stored rule is
-  `allow`.
+| Column       | Type        | Description              |
+| ------------ | ----------- | ------------------------ |
+| `id`         | UUID PK     |                          |
+| `tool_name`  | text UNIQUE |                          |
+| `action`     | text        | `allow` / `ask` / `deny` |
+| `created_at` | timestamp   |                          |
+| `updated_at` | timestamp   |                          |
 
 ## Migration Order
-
-Application migrations currently create the tables in this order:
 
 1. `V1__create_chat_tables.sql`
 2. `V2__create_token_usages.sql`
