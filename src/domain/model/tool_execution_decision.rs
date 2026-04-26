@@ -19,4 +19,12 @@ impl ToolExecutionDecision {
             (ToolExecutionPolicy::Ask, None) => Self::Ask,
         }
     }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+        }
+    }
 }

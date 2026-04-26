@@ -52,18 +52,23 @@ async fn main() -> Result<(), AgentCliError> {
             let llm_client = BedrockLlmProvider::from_default_config().await;
             let workspace_root = env::current_dir()?;
 
-            let tool_executor = ToolExecutor::new(vec![
-                Arc::new(AsrTool::from_env(workspace_root.clone())?),
-                Arc::new(FileSearchTool::new(workspace_root.clone(), 200)?),
-                Arc::new(OcrTool::new(workspace_root.clone())?),
-                Arc::new(ShellExecTool::new(workspace_root.clone())?),
-                Arc::new(FileWriteTool::new(workspace_root.clone())?),
-                Arc::new(FileEditTool::new(workspace_root.clone(), 1_048_576)?),
-                Arc::new(FileReadTool::new(workspace_root.clone(), 1_048_576)?),
-                Arc::new(TextSearchTool::new(workspace_root, 1_048_576, 200, 10)?),
-                Arc::new(WebFetchTool::new()?),
-                Arc::new(WebSearchTool::from_env()?),
-            ]);
+            let tool_execution_rule_repository =
+                PostgresToolExecutionRuleRepository::new(pool.clone());
+            let tool_executor = ToolExecutor::new(
+                vec![
+                    Arc::new(AsrTool::from_env(workspace_root.clone())?),
+                    Arc::new(FileSearchTool::new(workspace_root.clone(), 200)?),
+                    Arc::new(OcrTool::new(workspace_root.clone())?),
+                    Arc::new(ShellExecTool::new(workspace_root.clone())?),
+                    Arc::new(FileWriteTool::new(workspace_root.clone())?),
+                    Arc::new(FileEditTool::new(workspace_root.clone(), 1_048_576)?),
+                    Arc::new(FileReadTool::new(workspace_root.clone(), 1_048_576)?),
+                    Arc::new(TextSearchTool::new(workspace_root, 1_048_576, 200, 10)?),
+                    Arc::new(WebFetchTool::new()?),
+                    Arc::new(WebSearchTool::from_env()?),
+                ],
+                Arc::new(tool_execution_rule_repository.clone()),
+            );
 
             let context_service = ContextService::new(llm_client.clone());
             let agent_service = AgentService::new(llm_client, tool_executor);

@@ -140,7 +140,7 @@ impl<L: LlmProvider> AgentService<L> {
             let mut tool_call_results = Vec::new();
             for (index, tool_call) in tool_calls.iter().cloned().enumerate() {
                 // 5.1 Decide whether this tool call can run, must ask, or should be blocked.
-                match self.tool_executor.decide_execution(&tool_call) {
+                match self.tool_executor.decide_execution(&tool_call).await {
                     Ok(ToolExecutionDecision::Allow) => {
                         // 5.2 Run the tool and collect its result for the LLM.
                         let call_id = tool_call.id.clone();
@@ -322,7 +322,7 @@ impl<L: LlmProvider> AgentService<L> {
             let tool_call = remaining_tool_calls.remove(0);
 
             // 3.1 Decide whether this tool call can run, must ask, or should be blocked.
-            match self.tool_executor.decide_execution(&tool_call) {
+            match self.tool_executor.decide_execution(&tool_call).await {
                 Ok(ToolExecutionDecision::Allow) => {
                     // 3.2 Run the tool and collect its result for the LLM.
                     let call_id = tool_call.id.clone();

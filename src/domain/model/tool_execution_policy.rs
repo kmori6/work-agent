@@ -13,3 +13,13 @@ pub enum ToolExecutionPolicy {
     /// A stored `allow` rule must not bypass this policy.
     ConfirmEveryTime,
 }
+
+impl ToolExecutionPolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Ask => "ask",
+            Self::ConfirmEveryTime => "confirm",
+        }
+    }
+}

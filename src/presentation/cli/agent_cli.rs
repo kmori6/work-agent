@@ -240,19 +240,24 @@ where
         }
 
         AgentCommand::Tools => {
-            let tool_names = usecase.tool_names();
-            let rules = tool_execution_rule_usecase.list().await?;
-            let rule_map: std::collections::HashMap<&str, &str> = rules
-                .iter()
-                .map(|r| (r.tool_name.as_str(), r.action.as_str()))
-                .collect();
-            let lines: Vec<String> = tool_names
-                .iter()
-                .map(|name| {
-                    let rule = rule_map.get(name.as_str()).copied().unwrap_or("ask");
-                    format!("  {name:<30} {rule}")
-                })
-                .collect();
+            let summaries = usecase.tool_rule_summaries().await?;
+
+            let mut lines = vec![format!(
+                "  {:<20} {:<6} {:<6} {:<6} {}",
+                "tool", "action", "policy", "rule", "source"
+            )];
+
+            lines.extend(summaries.iter().map(|summary| {
+                format!(
+                    "  {:<20} {:<6} {:<6} {:<6} {}",
+                    summary.tool_name,
+                    summary.action.as_str(),
+                    summary.policy.as_str(),
+                    summary.rule.map_or("-", |rule| rule.as_str()),
+                    summary.source.as_str(),
+                )
+            }));
+
             println!("{}", lines.join("\n"));
         }
 

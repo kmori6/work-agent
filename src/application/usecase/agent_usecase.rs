@@ -17,6 +17,7 @@ use crate::domain::service::agent_service::{
     AgentApprovalRequired, AgentEvent as AgentProgressEvent, AgentOutput, AgentService,
 };
 use crate::domain::service::context_service::ContextService;
+use crate::domain::service::tool_service::ToolRuleSummary;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
@@ -384,6 +385,14 @@ where
             .await?;
 
         Ok(())
+    }
+
+    pub async fn tool_rule_summaries(&self) -> Result<Vec<ToolRuleSummary>, AgentUsecaseError> {
+        self.agent_service
+            .tool_executor()
+            .tool_rule_summaries()
+            .await
+            .map_err(Into::into)
     }
 }
 

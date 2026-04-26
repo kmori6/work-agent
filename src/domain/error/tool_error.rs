@@ -1,3 +1,4 @@
+use crate::domain::error::tool_execution_rule_repository_error::ToolExecutionRuleRepositoryError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -19,4 +20,7 @@ pub enum ToolError {
 
     #[error("tool execution failed: {0}")]
     ExecutionFailed(String),
+
+    #[error("failed to access tool execution rule: {0}")]
+    ExecutionRuleRepository(#[from] ToolExecutionRuleRepositoryError),
 }
