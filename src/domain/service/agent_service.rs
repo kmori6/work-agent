@@ -12,12 +12,6 @@ use tokio::sync::mpsc;
 
 const DEFAULT_MODEL: &str = "global.anthropic.claude-sonnet-4-6";
 const DEFAULT_MAX_TOOL_ITERATIONS: usize = 20;
-const DEFAULT_SYSTEM_PROMPT: &str = "\
-You are a helpful assistant.
-Answer clearly and directly in Japanese.
-Use available tools when they improve accuracy, especially for recent, external, or uncertain information.
-After gathering what you need, respond concisely and naturally.
-";
 
 #[derive(Debug, Clone)]
 pub struct AgentCompletion {
@@ -69,7 +63,6 @@ pub struct AgentService<L> {
     tool_executor: ToolExecutor,
     model: String,
     max_tool_iterations: usize,
-    system_prompt: String,
 }
 
 impl<L: LlmProvider> AgentService<L> {
@@ -79,7 +72,6 @@ impl<L: LlmProvider> AgentService<L> {
             tool_executor,
             model: DEFAULT_MODEL.to_string(),
             max_tool_iterations: DEFAULT_MAX_TOOL_ITERATIONS,
-            system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
         }
     }
 
@@ -233,10 +225,11 @@ impl<L: LlmProvider> AgentService<L> {
 
     pub async fn run(
         &self,
+        instruction: String,
         messages: Vec<Message>,
         tx: mpsc::Sender<AgentEvent>,
     ) -> Result<AgentOutput, AgentError> {
-        let instructions = Message::text(Role::System, self.system_prompt.clone());
+        let instructions = Message::text(Role::System, instruction);
         let input_messages = {
             let mut all_messages = Vec::with_capacity(messages.len() + 1);
             all_messages.push(instructions);

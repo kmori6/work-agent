@@ -17,6 +17,7 @@ use crate::domain::service::agent_service::{
     AgentApprovalRequired, AgentEvent as AgentProgressEvent, AgentOutput, AgentService,
 };
 use crate::domain::service::context_service::ContextService;
+use crate::domain::service::instruction_service::InstructionService;
 use crate::domain::service::tool_service::ToolRuleSummary;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, mpsc};
@@ -51,6 +52,7 @@ pub enum AgentEvent {
 
 pub struct AgentUsecase<L, S, M, T, A> {
     agent_service: AgentService<L>,
+    instruction_service: InstructionService,
     context_service: ContextService<L>,
     chat_session_repository: S,
     chat_message_repository: M,
@@ -69,6 +71,7 @@ where
 {
     pub fn new(
         agent_service: AgentService<L>,
+        instruction_service: InstructionService,
         context_service: ContextService<L>,
         chat_session_repository: S,
         chat_message_repository: M,
@@ -77,6 +80,7 @@ where
     ) -> Self {
         Self {
             agent_service,
+            instruction_service,
             context_service,
             chat_session_repository,
             chat_message_repository,
@@ -160,7 +164,11 @@ where
         let mut agent_messages = context_messages;
         agent_messages.push(user_message);
 
-        let output = self.agent_service.run(agent_messages, tx).await?;
+        let instruction = self.instruction_service.build_agent_instruction();
+        let output = self
+            .agent_service
+            .run(instruction, agent_messages, tx)
+            .await?;
 
         match output {
             AgentOutput::Completed(completion) => {

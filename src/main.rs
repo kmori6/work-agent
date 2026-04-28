@@ -11,8 +11,8 @@ use commander::application::usecase::{
 };
 use commander::domain::service::{
     agent_service::AgentService, context_service::ContextService,
-    deep_research_service::DeepResearchService, memory_index_service::MemoryIndexService,
-    tool_service::ToolExecutor,
+    deep_research_service::DeepResearchService, instruction_service::InstructionService,
+    memory_index_service::MemoryIndexService, tool_service::ToolExecutor,
 };
 use commander::infrastructure::{
     embedding::bedrock_embedding_provider::BedrockEmbeddingProvider,
@@ -63,6 +63,7 @@ async fn main() -> Result<(), AgentCliError> {
                 memory_index_repository,
             ));
             let workspace_root = env::current_dir()?;
+            let instruction_service = InstructionService::new(workspace_root.clone());
 
             let tool_execution_rule_repository =
                 PostgresToolExecutionRuleRepository::new(pool.clone());
@@ -101,6 +102,7 @@ async fn main() -> Result<(), AgentCliError> {
 
             let usecase = AgentUsecase::new(
                 agent_service,
+                instruction_service,
                 context_service,
                 chat_session_repository,
                 chat_message_repository,
