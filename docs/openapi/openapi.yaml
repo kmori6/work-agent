@@ -104,12 +104,15 @@ components:
       type: object
       required:
         - id
+        - status
         - created_at
         - updated_at
       properties:
         id:
           type: string
           format: uuid
+        status:
+          $ref: "#/components/schemas/ChatSessionStatus"
         created_at:
           type: string
           format: date-time
@@ -117,11 +120,20 @@ components:
           type: string
           format: date-time
 
+    ChatSessionStatus:
+      type: string
+      enum:
+        - idle
+        - running
+        - awaiting_approval
+      example: idle
+
     ChatSessionSummary:
       type: object
       required:
         - id
         - title
+        - status
         - created_at
         - updated_at
         - message_count
@@ -132,6 +144,8 @@ components:
         title:
           type: string
           example: What is the best way to structure this Rust API?
+        status:
+          $ref: "#/components/schemas/ChatSessionStatus"
         created_at:
           type: string
           format: date-time

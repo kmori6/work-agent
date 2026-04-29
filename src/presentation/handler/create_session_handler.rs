@@ -10,6 +10,7 @@ pub async fn create_session_handler(State(state): State<AppState>) -> impl IntoR
             StatusCode::CREATED,
             Json(json!({
                 "id": session.id.to_string(),
+                "status": session.status.as_str(),
                 "created_at": session.created_at.to_rfc3339(),
                 "updated_at": session.updated_at.to_rfc3339(),
             })),

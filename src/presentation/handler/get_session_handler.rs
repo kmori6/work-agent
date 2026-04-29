@@ -81,6 +81,7 @@ pub async fn get_session_handler(
                 "title": title_from_first_user_message(
                     message_summary.and_then(|summary| summary.first_user_message.as_deref()), TITLE_MAX_CHARS
                 ),
+                "status": session.status.as_str(),
                 "created_at": session.created_at.to_rfc3339(),
                 "updated_at": session.updated_at.to_rfc3339(),
                 "message_count": message_summary
