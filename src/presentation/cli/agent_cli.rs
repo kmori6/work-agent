@@ -8,11 +8,11 @@ use reedline::{Prompt, PromptEditMode, PromptHistorySearch, Reedline, Signal};
 use termimad::print_text;
 use uuid::Uuid;
 
+use crate::application::usecase::agent_usecase::Attachment;
 use crate::application::usecase::agent_usecase::{
     AgentEvent, AgentUsecase, HandleAgentInput, HandleAgentOutput,
 };
 use crate::application::usecase::tool_execution_rule_usecase::ToolExecutionRuleUsecase;
-use crate::domain::model::attachment::Attachment;
 use crate::domain::port::llm_provider::LlmProvider;
 use crate::domain::repository::chat_message_repository::ChatMessageRepository;
 use crate::domain::repository::chat_session_repository::ChatSessionRepository;

@@ -1,5 +1,5 @@
 use crate::domain::error::tool_error::ToolError;
-use crate::domain::model::tool::{ToolCall, ToolExecutionResult, ToolSpec};
+use crate::domain::model::tool_call::{ToolCall, ToolCallOutput, ToolSpec};
 use crate::domain::model::tool_execution_decision::ToolExecutionDecision;
 use crate::domain::model::tool_execution_policy::ToolExecutionPolicy;
 use crate::domain::model::tool_execution_rule::ToolExecutionRuleAction;
@@ -32,12 +32,12 @@ impl ToolRuleSource {
 }
 
 #[derive(Clone)]
-pub struct ToolExecutor {
+pub struct ToolService {
     tools: Vec<Arc<dyn Tool>>,
     rule_repository: Arc<dyn ToolExecutionRuleRepository>,
 }
 
-impl ToolExecutor {
+impl ToolService {
     pub fn new(
         tools: Vec<Arc<dyn Tool>>,
         rule_repository: Arc<dyn ToolExecutionRuleRepository>,
@@ -59,14 +59,19 @@ impl ToolExecutor {
             .collect()
     }
 
-    pub async fn execute(&self, call: ToolCall) -> Result<ToolExecutionResult, ToolError> {
+    pub async fn execute(&self, call: ToolCall) -> Result<ToolCallOutput, ToolError> {
         let tool = self
             .tools
             .iter()
             .find(|tool| tool.name() == call.name)
             .ok_or_else(|| ToolError::UnknownTool(call.name.clone()))?;
+        let result = tool.execute(call.arguments).await?;
 
-        tool.execute(call.arguments).await
+        Ok(ToolCallOutput {
+            call_id: call.call_id,
+            output: result.output,
+            status: result.status,
+        })
     }
 
     pub async fn decide_execution(

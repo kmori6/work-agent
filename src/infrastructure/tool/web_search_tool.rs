@@ -1,6 +1,6 @@
 use crate::domain::error::tool_error::ToolError;
-use crate::domain::model::tool::ToolExecutionResult;
 use crate::domain::port::tool::Tool;
+use crate::domain::port::tool::ToolOutput;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -88,7 +88,7 @@ impl Tool for WebSearchTool {
         })
     }
 
-    async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError> {
+    async fn execute(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
         let query = arguments
             .get("query")
             .and_then(|v| v.as_str())
@@ -247,7 +247,7 @@ impl Tool for WebSearchTool {
 
         let response = self.client.call(&request).await.map_err(map_tavily_error)?;
 
-        Ok(ToolExecutionResult::success(json!({
+        Ok(ToolOutput::success(json!({
             "query": response.query,
             "answer": response.answer,
             "response_time": response.response_time,

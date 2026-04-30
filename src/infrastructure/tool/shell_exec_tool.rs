@@ -1,6 +1,5 @@
 use crate::domain::error::tool_error::ToolError;
-use crate::domain::model::tool::ToolExecutionResult;
-use crate::domain::port::tool::{Tool, ToolExecutionPolicy};
+use crate::domain::port::tool::{Tool, ToolExecutionPolicy, ToolOutput};
 use crate::infrastructure::util::path::resolve_workspace_directory_path;
 use crate::infrastructure::util::text::truncate_text;
 use async_trait::async_trait;
@@ -124,7 +123,7 @@ impl Tool for ShellExecTool {
         assess_command_line(&command).policy()
     }
 
-    async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError> {
+    async fn execute(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
         let command = parse_command(&arguments)?;
         let workdir = parse_workdir(&arguments, &self.workspace_root)?;
         let timeout_secs = parse_timeout_secs(&arguments)?;
@@ -159,7 +158,7 @@ impl Tool for ShellExecTool {
         );
         let exit_code = output.status.code().unwrap_or(-1);
 
-        Ok(ToolExecutionResult::success(json!({
+        Ok(ToolOutput::success(json!({
             "stdout": stdout,
             "stderr": stderr,
             "exit_code": exit_code

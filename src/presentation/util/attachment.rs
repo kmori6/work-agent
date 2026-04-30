@@ -1,6 +1,7 @@
+use crate::application::usecase::agent_usecase::Attachment;
+use crate::domain::model::input_file::InputFile;
+use crate::domain::model::input_image::InputImage;
 use std::path::Path;
-
-use crate::domain::model::attachment::Attachment;
 
 pub fn load_attachment(path: &Path) -> Result<Attachment, String> {
     let filename = path
@@ -12,7 +13,15 @@ pub fn load_attachment(path: &Path) -> Result<Attachment, String> {
     let mime_type = mime_type_from_path(path);
     let data = std::fs::read(path).map_err(|e| format!("cannot read file: {e}"))?;
 
-    Ok(Attachment::new(filename, mime_type, data))
+    if mime_type.starts_with("image/") {
+        Ok(Attachment::Image(InputImage { mime_type, data }))
+    } else {
+        Ok(Attachment::File(InputFile {
+            filename,
+            mime_type,
+            data,
+        }))
+    }
 }
 
 pub fn mime_type_from_path(path: &Path) -> String {

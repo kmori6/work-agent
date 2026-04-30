@@ -1,5 +1,6 @@
 use crate::domain::error::agent_error::AgentError;
 use crate::domain::error::chat_repository_error::ChatRepositoryError;
+use crate::domain::error::message_error::MessageError;
 use crate::domain::error::token_usage_repository_error::TokenUsageRepositoryError;
 use crate::domain::error::tool_approval_repository_error::ToolApprovalRepositoryError;
 use crate::domain::error::tool_error::ToolError;
@@ -27,5 +28,8 @@ pub enum AgentUsecaseError {
     ToolApprovalRepository(#[from] ToolApprovalRepositoryError),
 
     #[error("failed to handle tool execution: {0}")]
-    Tool(#[from] ToolError),
+    ToolCall(#[from] ToolError),
+
+    #[error("invalid message: {0}")]
+    Message(#[from] MessageError),
 }

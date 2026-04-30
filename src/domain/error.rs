@@ -5,6 +5,8 @@ pub mod embedding_provider_error;
 pub mod llm_provider_error;
 pub mod memory_index_repository_error;
 pub mod memory_index_service_error;
+pub mod message_error;
+pub mod role_error;
 pub mod token_usage_repository_error;
 pub mod tool_approval_repository_error;
 pub mod tool_error;

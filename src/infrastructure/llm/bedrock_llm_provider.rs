@@ -1,9 +1,10 @@
 use crate::domain::error::llm_provider_error::LlmProviderError;
-use crate::domain::model::attachment::Attachment;
+use crate::domain::model::input_file::InputFile;
+use crate::domain::model::input_image::InputImage;
 use crate::domain::model::message::{Message, MessageContent};
 use crate::domain::model::role::Role;
 use crate::domain::model::token_usage::TokenUsage;
-use crate::domain::model::tool::{ToolCall, ToolSpec};
+use crate::domain::model::tool_call::{ToolCall, ToolCallOutputStatus, ToolSpec};
 use crate::domain::port::llm_provider::{LlmProvider, LlmResponse, StructuredOutputSchema};
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
@@ -23,6 +24,7 @@ use aws_smithy_types::Blob;
 use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use aws_smithy_types::{Document, Number};
 use std::collections::HashMap;
+use uuid::Uuid;
 
 struct ConverseOptions {
     tools: Option<Vec<ToolSpec>>,
@@ -75,7 +77,7 @@ impl BedrockLlmProvider {
 
         let system_blocks = build_system_content_blocks(&messages)?;
 
-        let message_blocks = build_content_block(&messages)?;
+        let message_blocks = build_content_blocks(&messages)?;
 
         let mut req = self
             .client
@@ -130,7 +132,7 @@ impl BedrockLlmProvider {
 
             if let Ok(tool_use) = block.as_tool_use() {
                 tool_calls.push(ToolCall {
-                    id: tool_use.tool_use_id().to_string(),
+                    call_id: tool_use.tool_use_id().to_string(),
                     name: tool_use.name().to_string(),
                     arguments: document_to_json(tool_use.input())?,
                 });
@@ -214,120 +216,176 @@ impl LlmProvider for BedrockLlmProvider {
 fn build_system_content_blocks(
     messages: &[Message],
 ) -> Result<Vec<SystemContentBlock>, LlmProviderError> {
-    messages
+    let mut blocks = Vec::new();
+
+    for message in messages
         .iter()
-        .filter(|m| m.role == Role::System)
-        .map(|m| match &m.content {
-            MessageContent::Text(text) => Ok(SystemContentBlock::Text(text.clone())),
-            MessageContent::Multimodal { .. } => Err(LlmProviderError::RequestBuild(
-                "System messages cannot contain attachments".to_string(),
-            )),
-            MessageContent::ToolCall { .. } => Err(LlmProviderError::RequestBuild(
-                "System messages cannot contain tool calls".to_string(),
-            )),
-            MessageContent::ToolResults(_) => Err(LlmProviderError::RequestBuild(
-                "System messages cannot contain tool results".to_string(),
-            )),
-        })
-        .collect()
+        .filter(|message| message.role == Role::System)
+    {
+        for content in &message.contents {
+            match content {
+                MessageContent::InputText(text) => {
+                    blocks.push(SystemContentBlock::Text(text.clone()));
+                }
+                MessageContent::OutputText(_) => {
+                    return Err(LlmProviderError::RequestBuild(
+                        "System messages cannot contain output text".to_string(),
+                    ));
+                }
+                MessageContent::InputImage(_) | MessageContent::InputFile(_) => {
+                    return Err(LlmProviderError::RequestBuild(
+                        "System messages cannot contain attachments".to_string(),
+                    ));
+                }
+                MessageContent::ToolCall(_) | MessageContent::ToolCallOutput(_) => {
+                    return Err(LlmProviderError::RequestBuild(
+                        "System messages cannot contain tool content".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(blocks)
 }
 
 /// Converts domain messages to Bedrock messages.
-fn build_content_block(messages: &[Message]) -> Result<Vec<BedrockMessage>, LlmProviderError> {
-    let mut message_blocks: Vec<BedrockMessage> = vec![];
-    for m in messages.iter().filter(|m| m.role != Role::System) {
-        let role = match m.role {
-            Role::Assistant => ConversationRole::Assistant,
-            _ => ConversationRole::User,
-        };
-        let msg = match &m.content {
-            MessageContent::Text(text) => BedrockMessage::builder()
-                .role(role.clone())
-                .content(ContentBlock::Text(text.clone()))
-                .build()
-                .map_err(|e| {
-                    LlmProviderError::RequestBuild(format!("Error building Bedrock message: {}", e))
-                })?,
-            MessageContent::Multimodal { text, attachments } => {
-                let mut builder = BedrockMessage::builder().role(role.clone());
+fn build_content_blocks(messages: &[Message]) -> Result<Vec<BedrockMessage>, LlmProviderError> {
+    let mut message_blocks = Vec::new();
+    let mut current_role: Option<Role> = None;
+    let mut current_contents: Vec<ContentBlock> = Vec::new();
 
-                if !text.is_empty() {
-                    builder = builder.content(ContentBlock::Text(text.clone()));
-                }
+    for message in messages
+        .iter()
+        .filter(|message| message.role != Role::System)
+    {
+        let blocks = message
+            .contents
+            .iter()
+            .map(|content| message_content_to_content_block(message.role, content))
+            .collect::<Result<Vec<_>, _>>()?;
 
-                for attachment in attachments {
-                    let block = attachment_to_content_block(attachment)?;
-                    builder = builder.content(block);
-                }
-
-                builder.build().map_err(|e| {
-                    LlmProviderError::RequestBuild(format!("Error building Bedrock message: {}", e))
-                })?
-            }
-            MessageContent::ToolCall { text, tool_calls } => {
-                let mut builder = BedrockMessage::builder().role(ConversationRole::Assistant);
-
-                if let Some(text) = text.as_ref().filter(|text| !text.is_empty()) {
-                    builder = builder.content(ContentBlock::Text(text.clone()));
-                }
-
-                for tool_call in tool_calls {
-                    let tool_use = ToolUseBlock::builder()
-                        .tool_use_id(tool_call.id.clone())
-                        .name(tool_call.name.clone())
-                        .input(json_to_document(&tool_call.arguments)?)
-                        .build()
-                        .map_err(|e| {
-                            LlmProviderError::RequestBuild(format!(
-                                "Error building Bedrock tool use block: {}",
-                                e
-                            ))
-                        })?;
-
-                    builder = builder.content(ContentBlock::ToolUse(tool_use));
-                }
-
-                builder.build().map_err(|e| {
-                    LlmProviderError::RequestBuild(format!("Error building Bedrock message: {}", e))
-                })?
-            }
-            MessageContent::ToolResults(tool_results) => {
-                let mut builder = BedrockMessage::builder().role(ConversationRole::User);
-
-                for tool_result in tool_results {
-                    let status = if tool_result.is_error {
-                        ToolResultStatus::Error
-                    } else {
-                        ToolResultStatus::Success
-                    };
-
-                    let result_content =
-                        ToolResultContentBlock::Json(json_to_document(&tool_result.output)?);
-
-                    let block = ToolResultBlock::builder()
-                        .tool_use_id(tool_result.tool_call_id.clone())
-                        .content(result_content)
-                        .status(status)
-                        .build()
-                        .map_err(|e| {
-                            LlmProviderError::RequestBuild(format!(
-                                "Error building Bedrock tool result block: {}",
-                                e
-                            ))
-                        })?;
-
-                    builder = builder.content(ContentBlock::ToolResult(block));
-                }
-
-                builder.build().map_err(|e| {
-                    LlmProviderError::RequestBuild(format!("Error building Bedrock message: {}", e))
-                })?
-            }
-        };
-        message_blocks.push(msg);
+        if current_role == Some(message.role) {
+            current_contents.extend(blocks);
+        } else {
+            push_bedrock_message(&mut message_blocks, current_role, &mut current_contents)?;
+            current_role = Some(message.role);
+            current_contents = blocks;
+        }
     }
 
+    push_bedrock_message(&mut message_blocks, current_role, &mut current_contents)?;
     Ok(message_blocks)
+}
+
+fn message_content_to_content_block(
+    role: Role,
+    content: &MessageContent,
+) -> Result<ContentBlock, LlmProviderError> {
+    match content {
+        MessageContent::InputText(text) | MessageContent::OutputText(text) => {
+            Ok(ContentBlock::Text(text.clone()))
+        }
+        MessageContent::InputImage(image) => {
+            if role != Role::User {
+                return Err(LlmProviderError::RequestBuild(
+                    "Images must be in user messages for Bedrock Converse".to_string(),
+                ));
+            }
+            input_image_to_content_block(image)
+        }
+        MessageContent::InputFile(file) => {
+            if role != Role::User {
+                return Err(LlmProviderError::RequestBuild(
+                    "Documents must be in user messages for Bedrock Converse".to_string(),
+                ));
+            }
+            input_file_to_content_block(file)
+        }
+        MessageContent::ToolCall(tool_call) => {
+            if role != Role::Assistant {
+                return Err(LlmProviderError::RequestBuild(
+                    "Tool calls must be in assistant messages".to_string(),
+                ));
+            }
+
+            let tool_use = ToolUseBlock::builder()
+                .tool_use_id(tool_call.call_id.clone())
+                .name(tool_call.name.clone())
+                .input(json_to_document(&tool_call.arguments)?)
+                .build()
+                .map_err(|e| {
+                    LlmProviderError::RequestBuild(format!(
+                        "Error building Bedrock tool use block: {e}"
+                    ))
+                })?;
+
+            Ok(ContentBlock::ToolUse(tool_use))
+        }
+        MessageContent::ToolCallOutput(tool_result) => {
+            if role != Role::User {
+                return Err(LlmProviderError::RequestBuild(
+                    "Tool call outputs must be in user messages".to_string(),
+                ));
+            }
+
+            let status = match tool_result.status {
+                ToolCallOutputStatus::Success => ToolResultStatus::Success,
+                ToolCallOutputStatus::Error => ToolResultStatus::Error,
+            };
+
+            let block = ToolResultBlock::builder()
+                .tool_use_id(tool_result.call_id.clone())
+                .content(ToolResultContentBlock::Json(json_to_document(
+                    &tool_result.output,
+                )?))
+                .status(status)
+                .build()
+                .map_err(|e| {
+                    LlmProviderError::RequestBuild(format!(
+                        "Error building Bedrock tool result block: {e}"
+                    ))
+                })?;
+
+            Ok(ContentBlock::ToolResult(block))
+        }
+    }
+}
+
+fn push_bedrock_message(
+    message_blocks: &mut Vec<BedrockMessage>,
+    role: Option<Role>,
+    contents: &mut Vec<ContentBlock>,
+) -> Result<(), LlmProviderError> {
+    let Some(role) = role else {
+        return Ok(());
+    };
+
+    if contents.is_empty() {
+        return Ok(());
+    }
+
+    let conversation_role = match role {
+        Role::User => ConversationRole::User,
+        Role::Assistant => ConversationRole::Assistant,
+        Role::System => {
+            return Err(LlmProviderError::RequestBuild(
+                "System messages must be converted to Bedrock system blocks".to_string(),
+            ));
+        }
+    };
+
+    let mut builder = BedrockMessage::builder().role(conversation_role);
+    for content in contents.drain(..) {
+        builder = builder.content(content);
+    }
+
+    let message = builder.build().map_err(|e| {
+        LlmProviderError::RequestBuild(format!("Error building Bedrock message: {e}"))
+    })?;
+
+    message_blocks.push(message);
+    Ok(())
 }
 
 /// Converts a Vec of ToolCall to a Bedrock ToolConfiguration.
@@ -454,55 +512,52 @@ fn structured_output_config(
     Ok(OutputConfig::builder().text_format(text_format).build())
 }
 
-/// Converts Attachment to a Bedrock ContentBlock.
-fn attachment_to_content_block(attachment: &Attachment) -> Result<ContentBlock, LlmProviderError> {
-    if attachment.is_image() {
-        let format = match attachment.mime_type.as_str() {
-            "image/png" => ImageFormat::Png,
-            "image/jpeg" | "image/jpg" => ImageFormat::Jpeg,
-            "image/gif" => ImageFormat::Gif,
-            "image/webp" => ImageFormat::Webp,
-            other => {
-                return Err(LlmProviderError::RequestBuild(format!(
-                    "Unsupported image format: {other}"
-                )));
-            }
-        };
-        let image_block = ImageBlock::builder()
-            .format(format)
-            .source(ImageSource::Bytes(Blob::new(attachment.data.clone())))
-            .build()
-            .map_err(|e| {
-                LlmProviderError::RequestBuild(format!("Error building ImageBlock: {e}"))
-            })?;
-        Ok(ContentBlock::Image(image_block))
-    } else {
-        let format = match attachment.mime_type.as_str() {
-            "application/pdf" => DocumentFormat::Pdf,
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            | "application/msword" => DocumentFormat::Docx,
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            | "application/vnd.ms-excel" => DocumentFormat::Xlsx,
-            "text/html" => DocumentFormat::Html,
-            "text/markdown" | "text/x-markdown" => DocumentFormat::Md,
-            "text/plain" => DocumentFormat::Txt,
-            "text/csv" => DocumentFormat::Csv,
-            other => {
-                return Err(LlmProviderError::RequestBuild(format!(
-                    "Unsupported document format: {other}"
-                )));
-            }
-        };
-        let doc_block = DocumentBlock::builder()
-            .format(format)
-            .name("attachment")
-            .source(DocumentSource::Bytes(Blob::new(attachment.data.clone())))
-            .build()
-            .map_err(|e| {
-                LlmProviderError::RequestBuild(format!("Error building DocumentBlock: {e}"))
-            })?;
-        Ok(ContentBlock::Document(doc_block))
-    }
+fn input_image_to_content_block(image: &InputImage) -> Result<ContentBlock, LlmProviderError> {
+    let format = match image.mime_type.as_str() {
+        "image/png" => ImageFormat::Png,
+        "image/jpeg" | "image/jpg" => ImageFormat::Jpeg,
+        "image/gif" => ImageFormat::Gif,
+        "image/webp" => ImageFormat::Webp,
+        other => {
+            return Err(LlmProviderError::RequestBuild(format!(
+                "Unsupported image format: {other}"
+            )));
+        }
+    };
+    let image_block = ImageBlock::builder()
+        .format(format)
+        .source(ImageSource::Bytes(Blob::new(image.data.clone())))
+        .build()
+        .map_err(|e| LlmProviderError::RequestBuild(format!("Error building ImageBlock: {e}")))?;
+    Ok(ContentBlock::Image(image_block))
+}
+
+fn input_file_to_content_block(file: &InputFile) -> Result<ContentBlock, LlmProviderError> {
+    let format = match file.mime_type.as_str() {
+        "application/pdf" => DocumentFormat::Pdf,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        | "application/msword" => DocumentFormat::Docx,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        | "application/vnd.ms-excel" => DocumentFormat::Xlsx,
+        "text/html" => DocumentFormat::Html,
+        "text/markdown" | "text/x-markdown" => DocumentFormat::Md,
+        "text/plain" => DocumentFormat::Txt,
+        "text/csv" => DocumentFormat::Csv,
+        other => {
+            return Err(LlmProviderError::RequestBuild(format!(
+                "Unsupported document format: {other}"
+            )));
+        }
+    };
+    let doc_block = DocumentBlock::builder()
+        .format(format)
+        .name(bedrock_document_name())
+        .source(DocumentSource::Bytes(Blob::new(file.data.clone())))
+        .build()
+        .map_err(|e| {
+            LlmProviderError::RequestBuild(format!("Error building DocumentBlock: {e}"))
+        })?;
+    Ok(ContentBlock::Document(doc_block))
 }
 
 fn convert_token_usage(usage: Option<&BedrockTokenUsage>) -> TokenUsage {
@@ -516,4 +571,8 @@ fn convert_token_usage(usage: Option<&BedrockTokenUsage>) -> TokenUsage {
         cache_read_tokens: usage.cache_read_input_tokens().unwrap_or_default().max(0) as u64,
         cache_write_tokens: usage.cache_write_input_tokens().unwrap_or_default().max(0) as u64,
     }
+}
+
+fn bedrock_document_name() -> String {
+    format!("document-{}", Uuid::new_v4())
 }

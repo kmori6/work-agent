@@ -1,5 +1,5 @@
 use crate::application::error::survey_usecase_error::SurveyUsecaseError;
-use crate::domain::model::message::Message;
+use crate::domain::model::message::{Message, MessageContent};
 use crate::domain::model::role::Role;
 use crate::domain::port::llm_provider::{LlmProvider, StructuredOutputSchema};
 use std::path::{Path, PathBuf};
@@ -28,16 +28,22 @@ impl<L: LlmProvider> SurveyUsecase<L> {
     pub async fn run(&self, input: RunSurveyInput) -> Result<RunSurveyOutput, SurveyUsecaseError> {
         let text = self.extract_text(&input.source).await?;
 
+        let messages = vec![
+            Message::new(
+                Role::System,
+                vec![MessageContent::InputText(SYSTEM_PROMPT.to_string())],
+            )
+            .map_err(|e| SurveyUsecaseError::LlmClient(e.to_string()))?,
+            Message::input_text(format!(
+                "Please read the following paper and summarize it.\n\n{text}"
+            ))
+            .map_err(|e| SurveyUsecaseError::LlmClient(e.to_string()))?,
+        ];
+
         let json = self
             .llm_provider
             .response_with_structure(
-                vec![
-                    Message::text(Role::System, SYSTEM_PROMPT),
-                    Message::text(
-                        Role::User,
-                        format!("Please read the following paper and summarize it.\n\n{text}"),
-                    ),
-                ],
+                messages,
                 StructuredOutputSchema {
                     name: "paper_survey".to_string(),
                     description: Some("Academic paper survey summary".to_string()),

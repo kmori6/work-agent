@@ -1,13 +1,11 @@
 use crate::domain::error::tool_error::ToolError;
-use crate::domain::model::tool::ToolExecutionResult;
-use crate::domain::port::tool::Tool;
+use crate::domain::port::tool::{Tool, ToolOutput};
 use crate::infrastructure::util::text::truncate_text;
 use crate::infrastructure::util::url::validate_external_url;
 use async_trait::async_trait;
 use reqwest::{header, redirect::Policy};
 use serde_json::{Value, json};
 use std::time::Duration;
-
 const DEFAULT_MAX_CHARS: usize = 12_000;
 const MAX_CHARS: usize = 50_000;
 const DEFAULT_TIMEOUT_SECS: u64 = 20;
@@ -86,7 +84,7 @@ impl Tool for WebFetchTool {
         })
     }
 
-    async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError> {
+    async fn execute(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
         let raw_url = arguments
             .get("url")
             .and_then(|value| value.as_str())
@@ -124,7 +122,7 @@ impl Tool for WebFetchTool {
         let text = extract_text_from_body(&content_type, &body)?;
         let (content, truncated) = truncate_text(text, max_chars);
 
-        Ok(ToolExecutionResult::success(json!({
+        Ok(ToolOutput::success(json!({
             "content": content,
             "truncated": truncated,
         })))
@@ -159,6 +157,8 @@ fn extract_text_from_body(content_type: &str, body: &str) -> Result<String, Tool
 
 #[cfg(test)]
 mod tests {
+    use crate::domain::model::tool_call::ToolCallOutputStatus;
+
     use super::*;
 
     #[tokio::test]
@@ -169,7 +169,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!result.is_error);
+        assert_eq!(result.status, ToolCallOutputStatus::Success);
         assert!(
             result.output["content"]
                 .as_str()

@@ -1,6 +1,6 @@
 use crate::domain::error::tool_error::ToolError;
-use crate::domain::model::tool::ToolExecutionResult;
 use crate::domain::port::tool::Tool;
+use crate::domain::port::tool::ToolOutput;
 use crate::domain::service::memory_index_service::MemoryIndexService;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -50,7 +50,7 @@ impl Tool for MemorySearchTool {
         })
     }
 
-    async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError> {
+    async fn execute(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
         let query = arguments
             .get("query")
             .and_then(|value| value.as_str())
@@ -92,7 +92,7 @@ impl Tool for MemorySearchTool {
             })
             .collect::<Vec<_>>();
 
-        Ok(ToolExecutionResult::success(json!({
+        Ok(ToolOutput::success(json!({
             "results": results
         })))
     }

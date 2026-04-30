@@ -1,7 +1,7 @@
 use crate::domain::error::llm_provider_error::LlmProviderError;
 use crate::domain::model::message::Message;
 use crate::domain::model::token_usage::TokenUsage;
-use crate::domain::model::tool::{ToolCall, ToolSpec};
+use crate::domain::model::tool_call::{ToolCall, ToolSpec};
 use async_trait::async_trait;
 
 #[derive(Debug, Clone)]

@@ -1,6 +1,6 @@
 use crate::domain::error::tool_error::ToolError;
-use crate::domain::model::tool::ToolExecutionResult;
 use crate::domain::port::tool::Tool;
+use crate::domain::port::tool::ToolOutput;
 use crate::domain::service::memory_index_service::MemoryIndexService;
 use crate::infrastructure::util::path::normalize_path;
 use async_trait::async_trait;
@@ -104,7 +104,7 @@ impl Tool for MemoryWriteTool {
         })
     }
 
-    async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError> {
+    async fn execute(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
         let target = arguments
             .get("target")
             .and_then(|value| value.as_str())
@@ -194,6 +194,6 @@ impl Tool for MemoryWriteTool {
             output["index_error"] = json!(error);
         }
 
-        Ok(ToolExecutionResult::success(output))
+        Ok(ToolOutput::success(output))
     }
 }

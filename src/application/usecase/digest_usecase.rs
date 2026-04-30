@@ -1,5 +1,5 @@
 use crate::application::error::digest_usecase_error::DigestUsecaseError;
-use crate::domain::model::message::Message;
+use crate::domain::model::message::{Message, MessageContent};
 use crate::domain::model::role::Role;
 use crate::domain::port::llm_provider::LlmProvider;
 
@@ -158,14 +158,18 @@ impl<L: LlmProvider + Sync> DigestUsecase<L> {
         system_prompt: &str,
         user_content: String,
     ) -> Result<String, DigestUsecaseError> {
-        self.llm_provider
-            .response(
-                vec![
-                    Message::text(Role::System, system_prompt),
-                    Message::text(Role::User, user_content),
-                ],
-                MODEL,
+        let messages = vec![
+            Message::new(
+                Role::System,
+                vec![MessageContent::InputText(system_prompt.to_string())],
             )
+            .map_err(|e| DigestUsecaseError::Translate(e.to_string()))?,
+            Message::input_text(user_content)
+                .map_err(|e| DigestUsecaseError::Translate(e.to_string()))?,
+        ];
+
+        self.llm_provider
+            .response(messages, MODEL)
             .await
             .map_err(|e| DigestUsecaseError::Translate(e.to_string()))
     }

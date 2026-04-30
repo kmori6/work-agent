@@ -10,9 +10,9 @@ use commander::application::usecase::{
     survey_usecase::SurveyUsecase, tool_execution_rule_usecase::ToolExecutionRuleUsecase,
 };
 use commander::domain::service::{
-    agent_service::AgentService, context_service::ContextService,
+    agent_service::AgentService, compaction_service::CompactionService,
     deep_research_service::DeepResearchService, instruction_service::InstructionService,
-    memory_index_service::MemoryIndexService, tool_service::ToolExecutor,
+    memory_index_service::MemoryIndexService, tool_service::ToolService,
 };
 use commander::infrastructure::{
     embedding::bedrock_embedding_provider::BedrockEmbeddingProvider,
@@ -71,7 +71,7 @@ async fn main() -> Result<(), AgentCliError> {
 
             let tool_execution_rule_repository =
                 PostgresToolExecutionRuleRepository::new(pool.clone());
-            let tool_executor = ToolExecutor::new(
+            let tool_service = ToolService::new(
                 vec![
                     Arc::new(AsrTool::from_env(workspace_root.clone())?),
                     Arc::new(FileSearchTool::new(workspace_root.clone(), 200)?),
@@ -92,8 +92,8 @@ async fn main() -> Result<(), AgentCliError> {
                 Arc::new(tool_execution_rule_repository.clone()),
             );
 
-            let context_service = ContextService::new(llm_client.clone());
-            let agent_service = AgentService::new(llm_client, tool_executor);
+            let context_service = CompactionService::new(llm_client.clone());
+            let agent_service = AgentService::new(llm_client, tool_service);
 
             let chat_session_repository = PostgresChatSessionRepository::new(pool.clone());
             let chat_message_repository = PostgresChatMessageRepository::new(pool.clone());

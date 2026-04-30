@@ -1,6 +1,5 @@
 use crate::domain::error::tool_error::ToolError;
-use crate::domain::model::tool::ToolExecutionResult;
-use crate::domain::port::tool::{Tool, ToolExecutionPolicy};
+use crate::domain::port::tool::{Tool, ToolExecutionPolicy, ToolOutput};
 use crate::infrastructure::util::path::{normalize_path, read_workspace_text_file};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -65,7 +64,7 @@ impl Tool for FileEditTool {
         ToolExecutionPolicy::Ask
     }
 
-    async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError> {
+    async fn execute(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
         let path = arguments
             .get("path")
             .and_then(|value| value.as_str())
@@ -121,7 +120,7 @@ impl Tool for FileEditTool {
             .map(normalize_path)
             .expect("resolved_path must be inside workspace_root");
 
-        Ok(ToolExecutionResult::success(json!({
+        Ok(ToolOutput::success(json!({
             "path": relative_path
         })))
     }
@@ -129,6 +128,8 @@ impl Tool for FileEditTool {
 
 #[cfg(test)]
 mod tests {
+    use crate::domain::model::tool_call::ToolCallOutputStatus;
+
     use super::*;
     use serde_json::json;
     use std::fs;
@@ -159,7 +160,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!result.is_error);
+        assert_eq!(result.status, ToolCallOutputStatus::Success);
         assert_eq!(result.output["path"], json!("hello.txt"));
         assert_eq!(
             fs::read_to_string(root.join("hello.txt")).unwrap(),
@@ -182,7 +183,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!result.is_error);
+        assert_eq!(result.status, ToolCallOutputStatus::Success);
         assert_eq!(result.output["path"], json!("hello.txt"));
         assert_eq!(fs::read_to_string(root.join("hello.txt")).unwrap(), "hello");
     }

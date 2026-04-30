@@ -1,8 +1,30 @@
 use crate::domain::error::tool_error::ToolError;
-use crate::domain::model::tool::{ToolExecutionResult, ToolSpec};
+use crate::domain::model::tool_call::{ToolCallOutputStatus, ToolSpec};
 pub use crate::domain::model::tool_execution_policy::ToolExecutionPolicy;
 use async_trait::async_trait;
 use serde_json::Value;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolOutput {
+    pub output: Value,
+    pub status: ToolCallOutputStatus,
+}
+
+impl ToolOutput {
+    pub fn success(output: Value) -> Self {
+        Self {
+            output,
+            status: ToolCallOutputStatus::Success,
+        }
+    }
+
+    pub fn error(output: Value) -> Self {
+        Self {
+            output,
+            status: ToolCallOutputStatus::Error,
+        }
+    }
+}
 
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -26,5 +48,5 @@ pub trait Tool: Send + Sync {
         ToolExecutionPolicy::Auto
     }
 
-    async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError>;
+    async fn execute(&self, arguments: Value) -> Result<ToolOutput, ToolError>;
 }

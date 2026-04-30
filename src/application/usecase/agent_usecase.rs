@@ -1,6 +1,7 @@
 use crate::application::error::agent_usecase_error::AgentUsecaseError;
-use crate::domain::model::attachment::Attachment;
 use crate::domain::model::chat_session::ChatSession;
+use crate::domain::model::input_file::InputFile;
+use crate::domain::model::input_image::InputImage;
 use crate::domain::model::message::{Message, MessageContent};
 use crate::domain::model::role::Role;
 use crate::domain::model::token_usage::TokenUsage;
@@ -16,12 +17,18 @@ use crate::domain::repository::tool_approval_repository::ToolApprovalRepository;
 use crate::domain::service::agent_service::{
     AgentApprovalRequired, AgentEvent as AgentProgressEvent, AgentOutput, AgentService,
 };
-use crate::domain::service::context_service::ContextService;
+use crate::domain::service::compaction_service::CompactionService;
 use crate::domain::service::instruction_service::InstructionService;
 use crate::domain::service::tool_service::ToolRuleSummary;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+pub enum Attachment {
+    Image(InputImage),
+    File(InputFile),
+}
 
 #[derive(Debug)]
 pub struct HandleAgentInput {
@@ -53,7 +60,7 @@ pub enum AgentEvent {
 pub struct AgentUsecase<L, S, M, T, A> {
     agent_service: AgentService<L>,
     instruction_service: InstructionService,
-    context_service: ContextService<L>,
+    compaction_service: CompactionService<L>,
     chat_session_repository: S,
     chat_message_repository: M,
     token_usage_repository: T,
@@ -72,7 +79,7 @@ where
     pub fn new(
         agent_service: AgentService<L>,
         instruction_service: InstructionService,
-        context_service: ContextService<L>,
+        compaction_service: CompactionService<L>,
         chat_session_repository: S,
         chat_message_repository: M,
         token_usage_repository: T,
@@ -81,7 +88,7 @@ where
         Self {
             agent_service,
             instruction_service,
-            context_service,
+            compaction_service,
             chat_session_repository,
             chat_message_repository,
             token_usage_repository,
@@ -115,7 +122,7 @@ where
     }
 
     pub fn tool_names(&self) -> Vec<String> {
-        self.agent_service.tool_executor().tool_names()
+        self.agent_service.tool_service().tool_names()
     }
 
     pub async fn handle(
@@ -149,12 +156,12 @@ where
 
         // 3. Build the LLM context from the stored history.
         let context_messages = self
-            .context_service
-            .build_context(history, last_usage)
+            .compaction_service
+            .compact_if_needed(history, last_usage)
             .await?;
 
         // 4. Build and save the new user message.
-        let user_message = build_user_message(&input);
+        let user_message = build_user_message(&input)?;
 
         self.chat_message_repository
             .append(input.session_id, user_message.clone())
@@ -208,9 +215,9 @@ where
                     events: vec![AgentEvent::AssistantMessage(final_text)],
                     usage: completion.usage,
                     context_input_tokens: completion.usage.input_tokens,
-                    context_window_tokens: self.context_service.context_window_tokens(),
+                    context_window_tokens: self.compaction_service.context_window_tokens(),
                     context_percent_used: self
-                        .context_service
+                        .compaction_service
                         .percent_used(completion.usage.input_tokens),
                 })
             }
@@ -234,8 +241,10 @@ where
                     events: vec![event],
                     usage: TokenUsage::default(),
                     context_input_tokens,
-                    context_window_tokens: self.context_service.context_window_tokens(),
-                    context_percent_used: self.context_service.percent_used(context_input_tokens),
+                    context_window_tokens: self.compaction_service.context_window_tokens(),
+                    context_percent_used: self
+                        .compaction_service
+                        .percent_used(context_input_tokens),
                 })
             }
         }
@@ -335,9 +344,9 @@ where
                     events: vec![AgentEvent::AssistantMessage(final_text)],
                     usage: completion.usage,
                     context_input_tokens: completion.usage.input_tokens,
-                    context_window_tokens: self.context_service.context_window_tokens(),
+                    context_window_tokens: self.compaction_service.context_window_tokens(),
                     context_percent_used: self
-                        .context_service
+                        .compaction_service
                         .percent_used(completion.usage.input_tokens),
                 })
             }
@@ -356,9 +365,9 @@ where
                     events: vec![event],
                     usage: TokenUsage::default(),
                     context_input_tokens: fallback_context_input_tokens,
-                    context_window_tokens: self.context_service.context_window_tokens(),
+                    context_window_tokens: self.compaction_service.context_window_tokens(),
                     context_percent_used: self
-                        .context_service
+                        .compaction_service
                         .percent_used(fallback_context_input_tokens),
                 })
             }
@@ -370,8 +379,10 @@ where
         session_id: Uuid,
         text: impl Into<String>,
     ) -> Result<(), AgentUsecaseError> {
+        let message = Message::input_text(text.into())?;
+
         self.chat_message_repository
-            .append(session_id, Message::text(Role::User, text.into()))
+            .append(session_id, message)
             .await?;
 
         Ok(())
@@ -397,22 +408,26 @@ where
 
     pub async fn tool_rule_summaries(&self) -> Result<Vec<ToolRuleSummary>, AgentUsecaseError> {
         self.agent_service
-            .tool_executor()
+            .tool_service()
             .tool_rule_summaries()
             .await
             .map_err(Into::into)
     }
 }
 
-fn build_user_message(input: &HandleAgentInput) -> Message {
-    if input.attachments.is_empty() {
-        Message::text(Role::User, input.user_input.clone())
-    } else {
-        Message::multimodal(
-            Role::User,
-            input.user_input.clone(),
-            input.attachments.clone(),
-        )
+fn build_user_message(input: &HandleAgentInput) -> Result<Message, AgentUsecaseError> {
+    let mut contents = Vec::with_capacity(input.attachments.len() + 1);
+
+    contents.push(MessageContent::InputText(input.user_input.clone()));
+    contents.extend(input.attachments.iter().map(attachment_to_message_content));
+
+    Ok(Message::new(Role::User, contents)?)
+}
+
+fn attachment_to_message_content(attachment: &Attachment) -> MessageContent {
+    match attachment {
+        Attachment::Image(image) => MessageContent::InputImage(image.clone()),
+        Attachment::File(file) => MessageContent::InputFile(file.clone()),
     }
 }
 
@@ -420,11 +435,10 @@ fn final_assistant_text(messages: &[Message]) -> Option<String> {
     messages
         .iter()
         .rev()
-        .find_map(|message| match &message.content {
-            MessageContent::Text(text) if message.role == Role::Assistant => Some(text.clone()),
-            MessageContent::ToolCall {
-                text: Some(text), ..
-            } if message.role == Role::Assistant => Some(text.clone()),
+        .filter(|message| message.role == Role::Assistant)
+        .flat_map(|message| message.contents.iter().rev())
+        .find_map(|content| match content {
+            MessageContent::OutputText(text) => Some(text.clone()),
             _ => None,
         })
 }

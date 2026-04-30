@@ -1,12 +1,12 @@
 use crate::domain::error::agent_error::AgentError;
-use crate::domain::model::message::Message;
+use crate::domain::model::message::{Message, MessageContent};
 use crate::domain::model::role::Role;
 use crate::domain::model::token_usage::TokenUsage;
-use crate::domain::model::tool::{ToolCall, ToolExecutionResult, ToolResultMessage};
 use crate::domain::model::tool_approval::{ToolApprovalDecision, ToolApprovalRequest};
+use crate::domain::model::tool_call::{ToolCall, ToolCallOutput, ToolCallOutputStatus};
 use crate::domain::model::tool_execution_decision::ToolExecutionDecision;
 use crate::domain::port::llm_provider::LlmProvider;
-use crate::domain::service::tool_service::ToolExecutor;
+use crate::domain::service::tool_service::ToolService;
 use serde_json::json;
 use tokio::sync::mpsc;
 
@@ -39,7 +39,7 @@ pub struct AgentContinuation {
 
     pending_tool_call: ToolCall,
     remaining_tool_calls: Vec<ToolCall>,
-    accumulated_tool_results: Vec<ToolResultMessage>,
+    accumulated_tool_results: Vec<ToolCallOutput>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,23 +60,23 @@ pub enum AgentEvent {
 
 pub struct AgentService<L> {
     llm_provider: L,
-    tool_executor: ToolExecutor,
+    tool_service: ToolService,
     model: String,
     max_tool_iterations: usize,
 }
 
 impl<L: LlmProvider> AgentService<L> {
-    pub fn new(llm_provider: L, tool_executor: ToolExecutor) -> Self {
+    pub fn new(llm_provider: L, tool_service: ToolService) -> Self {
         Self {
             llm_provider,
-            tool_executor,
+            tool_service,
             model: DEFAULT_MODEL.to_string(),
             max_tool_iterations: DEFAULT_MAX_TOOL_ITERATIONS,
         }
     }
 
-    pub fn tool_executor(&self) -> &ToolExecutor {
-        &self.tool_executor
+    pub fn tool_service(&self) -> &ToolService {
+        &self.tool_service
     }
 
     pub fn model(&self) -> &str {
@@ -99,25 +99,19 @@ impl<L: LlmProvider> AgentService<L> {
             let _ = tx.send(AgentEvent::LlmStarted).await;
             let response = self
                 .llm_provider
-                .response_with_tool(llm_messages, self.tool_executor.specs(), &self.model)
+                .response_with_tool(llm_messages, self.tool_service.specs(), &self.model)
                 .await?;
             usage += response.usage;
             let _ = tx.send(AgentEvent::LlmFinished).await;
 
             // 3. Add the assistant response, including tool calls when present.
-            let assistant_message = if response.tool_calls.is_empty() {
-                Message::text(Role::Assistant, response.text.clone())
-            } else {
-                Message::tool_call(
-                    if response.text.is_empty() {
-                        None
-                    } else {
-                        Some(response.text.clone())
-                    },
-                    response.tool_calls.clone(),
-                )
-            };
-            new_messages.push(assistant_message);
+            if !response.text.is_empty() || response.tool_calls.is_empty() {
+                new_messages.push(Message::output_text(response.text.clone())?);
+            }
+
+            if !response.tool_calls.is_empty() {
+                new_messages.push(Message::tool_calls(response.tool_calls.clone())?);
+            }
 
             // 4. Complete the run when the LLM did not request any tools.
             if response.tool_calls.is_empty() {
@@ -132,10 +126,10 @@ impl<L: LlmProvider> AgentService<L> {
             let mut tool_call_results = Vec::new();
             for (index, tool_call) in tool_calls.iter().cloned().enumerate() {
                 // 5.1 Decide whether this tool call can run, must ask, or should be blocked.
-                match self.tool_executor.decide_execution(&tool_call).await {
+                match self.tool_service.decide_execution(&tool_call).await {
                     Ok(ToolExecutionDecision::Allow) => {
                         // 5.2 Run the tool and collect its result for the LLM.
-                        let call_id = tool_call.id.clone();
+                        let call_id = tool_call.call_id.clone();
                         let tool_name = tool_call.name.clone();
 
                         let _ = tx
@@ -145,17 +139,15 @@ impl<L: LlmProvider> AgentService<L> {
                             })
                             .await;
 
-                        let result = self.tool_executor.execute(tool_call).await;
+                        let result = self.tool_service.execute(tool_call).await;
 
                         let tool_result = match result {
-                            Ok(result) => {
-                                ToolResultMessage::from_execution(call_id.clone(), result)
-                            }
-                            Err(err) => ToolResultMessage::from_execution(
+                            Ok(result) => result,
+                            Err(err) => ToolCallOutput::error(
                                 call_id.clone(),
-                                ToolExecutionResult::error(json!({
+                                json!({
                                     "message": err.to_string(),
-                                })),
+                                }),
                             ),
                         };
 
@@ -163,7 +155,7 @@ impl<L: LlmProvider> AgentService<L> {
                             .send(AgentEvent::ToolFinished {
                                 call_id,
                                 tool_name,
-                                success: !tool_result.is_error,
+                                success: tool_result.status == ToolCallOutputStatus::Success,
                             })
                             .await;
 
@@ -171,12 +163,12 @@ impl<L: LlmProvider> AgentService<L> {
                     }
                     Ok(ToolExecutionDecision::Ask) => {
                         // 5.3 Pause the run and return everything needed to resume after approval.
-                        let policy = self.tool_executor.check_execution_policy(&tool_call)?;
+                        let policy = self.tool_service.check_execution_policy(&tool_call)?;
                         let remaining_tool_calls = tool_calls[index + 1..].to_vec();
                         return Ok(AgentOutput::ApprovalRequired(Box::new(
                             AgentApprovalRequired {
                                 request: ToolApprovalRequest {
-                                    call_id: tool_call.id.clone(),
+                                    call_id: tool_call.call_id.clone(),
                                     tool_name: tool_call.name.clone(),
                                     arguments: tool_call.arguments.clone(),
                                     policy,
@@ -194,20 +186,20 @@ impl<L: LlmProvider> AgentService<L> {
                     }
                     Ok(ToolExecutionDecision::Deny) => {
                         // 5.4 Convert a blocked tool call into a tool result for the LLM.
-                        tool_call_results.push(ToolResultMessage::from_execution(
-                            tool_call.id,
-                            ToolExecutionResult::error(json!({
+                        tool_call_results.push(ToolCallOutput::error(
+                            tool_call.call_id,
+                            json!({
                                 "message": "tool execution was blocked by execution rule",
-                            })),
+                            }),
                         ));
                     }
                     Err(err) => {
                         // 5.5 Convert tool lookup or policy errors into a tool result for the LLM.
-                        tool_call_results.push(ToolResultMessage::from_execution(
-                            tool_call.id,
-                            ToolExecutionResult::error(json!({
+                        tool_call_results.push(ToolCallOutput::error(
+                            tool_call.call_id,
+                            json!({
                                 "message": err.to_string(),
-                            })),
+                            }),
                         ));
                     }
                 }
@@ -215,7 +207,7 @@ impl<L: LlmProvider> AgentService<L> {
 
             // 6. Feed all tool results back into the next LLM iteration.
             if !tool_call_results.is_empty() {
-                new_messages.push(Message::tool_results(tool_call_results));
+                new_messages.push(Message::tool_call_outputs(tool_call_results)?);
             }
         }
 
@@ -229,7 +221,8 @@ impl<L: LlmProvider> AgentService<L> {
         messages: Vec<Message>,
         tx: mpsc::Sender<AgentEvent>,
     ) -> Result<AgentOutput, AgentError> {
-        let instructions = Message::text(Role::System, instruction);
+        let instructions =
+            Message::new(Role::System, vec![MessageContent::InputText(instruction)])?;
         let input_messages = {
             let mut all_messages = Vec::with_capacity(messages.len() + 1);
             all_messages.push(instructions);
@@ -265,7 +258,7 @@ impl<L: LlmProvider> AgentService<L> {
         match decision {
             ToolApprovalDecision::Approved => {
                 // 2.1 Run the approved tool and collect its result for the LLM.
-                let call_id = pending_tool_call.id.clone();
+                let call_id = pending_tool_call.call_id.clone();
                 let tool_name = pending_tool_call.name.clone();
 
                 let _ = tx
@@ -275,15 +268,15 @@ impl<L: LlmProvider> AgentService<L> {
                     })
                     .await;
 
-                let result = self.tool_executor.execute(pending_tool_call).await;
+                let result = self.tool_service.execute(pending_tool_call).await;
 
                 let tool_result = match result {
-                    Ok(result) => ToolResultMessage::from_execution(call_id.clone(), result),
-                    Err(err) => ToolResultMessage::from_execution(
+                    Ok(result) => result,
+                    Err(err) => ToolCallOutput::error(
                         call_id.clone(),
-                        ToolExecutionResult::error(json!({
+                        json!({
                             "message": err.to_string(),
-                        })),
+                        }),
                     ),
                 };
 
@@ -291,7 +284,7 @@ impl<L: LlmProvider> AgentService<L> {
                     .send(AgentEvent::ToolFinished {
                         call_id,
                         tool_name,
-                        success: !tool_result.is_error,
+                        success: tool_result.status == ToolCallOutputStatus::Success,
                     })
                     .await;
 
@@ -299,11 +292,11 @@ impl<L: LlmProvider> AgentService<L> {
             }
             ToolApprovalDecision::Denied => {
                 // 2.2 Convert the denied tool call into a tool result for the LLM.
-                accumulated_tool_results.push(ToolResultMessage::from_execution(
-                    pending_tool_call.id,
-                    ToolExecutionResult::error(json!({
+                accumulated_tool_results.push(ToolCallOutput::error(
+                    pending_tool_call.call_id,
+                    json!({
                         "message": "tool execution was denied by user",
-                    })),
+                    }),
                 ));
             }
         }
@@ -315,10 +308,10 @@ impl<L: LlmProvider> AgentService<L> {
             let tool_call = remaining_tool_calls.remove(0);
 
             // 3.1 Decide whether this tool call can run, must ask, or should be blocked.
-            match self.tool_executor.decide_execution(&tool_call).await {
+            match self.tool_service.decide_execution(&tool_call).await {
                 Ok(ToolExecutionDecision::Allow) => {
                     // 3.2 Run the tool and collect its result for the LLM.
-                    let call_id = tool_call.id.clone();
+                    let call_id = tool_call.call_id.clone();
                     let tool_name = tool_call.name.clone();
 
                     let _ = tx
@@ -328,15 +321,15 @@ impl<L: LlmProvider> AgentService<L> {
                         })
                         .await;
 
-                    let result = self.tool_executor.execute(tool_call).await;
+                    let result = self.tool_service.execute(tool_call).await;
 
                     let tool_result = match result {
-                        Ok(result) => ToolResultMessage::from_execution(call_id.clone(), result),
-                        Err(err) => ToolResultMessage::from_execution(
+                        Ok(result) => result,
+                        Err(err) => ToolCallOutput::error(
                             call_id.clone(),
-                            ToolExecutionResult::error(json!({
+                            json!({
                                 "message": err.to_string(),
-                            })),
+                            }),
                         ),
                     };
 
@@ -344,7 +337,7 @@ impl<L: LlmProvider> AgentService<L> {
                         .send(AgentEvent::ToolFinished {
                             call_id,
                             tool_name,
-                            success: !tool_result.is_error,
+                            success: tool_result.status == ToolCallOutputStatus::Success,
                         })
                         .await;
 
@@ -352,12 +345,12 @@ impl<L: LlmProvider> AgentService<L> {
                 }
                 Ok(ToolExecutionDecision::Ask) => {
                     // 3.3 Pause again and return everything needed to resume after approval.
-                    let policy = self.tool_executor.check_execution_policy(&tool_call)?;
+                    let policy = self.tool_service.check_execution_policy(&tool_call)?;
 
                     return Ok(AgentOutput::ApprovalRequired(Box::new(
                         AgentApprovalRequired {
                             request: ToolApprovalRequest {
-                                call_id: tool_call.id.clone(),
+                                call_id: tool_call.call_id.clone(),
                                 tool_name: tool_call.name.clone(),
                                 arguments: tool_call.arguments.clone(),
                                 policy,
@@ -375,20 +368,19 @@ impl<L: LlmProvider> AgentService<L> {
                 }
                 Ok(ToolExecutionDecision::Deny) => {
                     // 3.4 Convert a blocked tool call into a tool result for the LLM.
-                    accumulated_tool_results.push(ToolResultMessage::from_execution(
-                        tool_call.id,
-                        ToolExecutionResult::error(json!({
+                    accumulated_tool_results.push(ToolCallOutput::error(
+                        tool_call.call_id,
+                        json!({
                             "message": "tool execution was blocked by execution rule",
-                        })),
+                        }),
                     ));
                 }
                 Err(err) => {
-                    // 3.5 Convert tool lookup or policy errors into a tool result for the LLM.
-                    accumulated_tool_results.push(ToolResultMessage::from_execution(
-                        tool_call.id,
-                        ToolExecutionResult::error(json!({
+                    accumulated_tool_results.push(ToolCallOutput::error(
+                        tool_call.call_id,
+                        json!({
                             "message": err.to_string(),
-                        })),
+                        }),
                     ));
                 }
             }
@@ -396,7 +388,7 @@ impl<L: LlmProvider> AgentService<L> {
 
         // 4. Feed all accumulated tool results back into the next LLM iteration.
         if !accumulated_tool_results.is_empty() {
-            new_messages.push(Message::tool_results(accumulated_tool_results));
+            new_messages.push(Message::tool_call_outputs(accumulated_tool_results)?);
         }
 
         // 5. Continue the normal agent loop.

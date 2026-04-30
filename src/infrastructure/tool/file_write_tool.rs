@@ -1,6 +1,5 @@
 use crate::domain::error::tool_error::ToolError;
-use crate::domain::model::tool::ToolExecutionResult;
-use crate::domain::port::tool::{Tool, ToolExecutionPolicy};
+use crate::domain::port::tool::{Tool, ToolExecutionPolicy, ToolOutput};
 use crate::infrastructure::util::path::{contains_parent_dir, normalize_path};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -87,7 +86,7 @@ impl Tool for FileWriteTool {
         ToolExecutionPolicy::Ask
     }
 
-    async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError> {
+    async fn execute(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
         let path = arguments
             .get("path")
             .and_then(|value| value.as_str())
@@ -134,7 +133,7 @@ impl Tool for FileWriteTool {
             .map(normalize_path)
             .expect("resolved_target must be inside workspace_root");
 
-        Ok(ToolExecutionResult::success(json!({
+        Ok(ToolOutput::success(json!({
             "path": relative_path,
             "bytes_written": content_bytes
         })))
@@ -143,6 +142,8 @@ impl Tool for FileWriteTool {
 
 #[cfg(test)]
 mod tests {
+    use crate::domain::model::tool_call::ToolCallOutputStatus;
+
     use super::*;
     use serde_json::json;
     use std::fs;
@@ -173,7 +174,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!result.is_error);
+        assert_eq!(result.status, ToolCallOutputStatus::Success);
         assert_eq!(result.output["path"], json!("data/tasks/meeting.md"));
         assert_eq!(
             fs::read_to_string(root.join("data/tasks/meeting.md")).unwrap(),
@@ -196,7 +197,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!result.is_error);
+        assert_eq!(result.status, ToolCallOutputStatus::Success);
         assert_eq!(result.output["path"], json!("data/existing.md"));
         assert_eq!(result.output["bytes_written"], json!(3));
         assert_eq!(

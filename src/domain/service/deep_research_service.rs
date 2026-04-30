@@ -1,6 +1,6 @@
 use crate::domain::error::deep_research_error::DeepResearchError;
 use crate::domain::error::llm_provider_error::LlmProviderError;
-use crate::domain::model::message::Message;
+use crate::domain::model::message::{Message, MessageContent};
 use crate::domain::model::role::Role;
 use crate::domain::port::llm_provider::LlmProvider;
 use crate::domain::port::llm_provider::StructuredOutputSchema;
@@ -128,16 +128,12 @@ where
             .join("\n");
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "You are a research writing assistant. Write an initial draft report for the user's query. The draft must be written in Japanese. It should be coherent, useful, and explicitly tentative where facts may need verification. Do not invent citations, URLs, or precise facts you are not confident about.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "Write a preliminary draft report for the following query.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nRequirements:\n- Write in Japanese\n- Organize the draft around the research plan\n- Cover every plan item at least once\n- Use the model's internal knowledge only\n- If something may require verification, write it cautiously rather than pretending it is confirmed\n- Do not include citations or URLs\n- Return only the draft report in Markdown"
-                ),
-            ),
+            user_message(format!(
+                "Write a preliminary draft report for the following query.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nRequirements:\n- Write in Japanese\n- Organize the draft around the research plan\n- Cover every plan item at least once\n- Use the model's internal knowledge only\n- If something may require verification, write it cautiously rather than pretending it is confirmed\n- Do not include citations or URLs\n- Return only the draft report in Markdown"
+            )),
         ];
 
         let content = self.llm_provider.response(messages, &self.model).await?;
@@ -224,21 +220,17 @@ where
             .join("\n\n");
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "You are a research draft revision assistant. Revise the current draft report using the newly retrieved answer. The revised draft must be written in Japanese. Improve accuracy, reduce uncertainty where the new evidence helps, remove redundancy, and keep the report coherent. Do not invent facts beyond the provided draft and retrieved answers.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "Revise the current draft report for the following query.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nCurrent draft (revision {}):\n{}\n\nLatest retrieved question-answer pair:\nFocus: {}\nQuestion: {}\nAnswer: {}\n\nAll question-answer history:\n{history_text}\n\nRequirements:\n- Write in Japanese\n- Revise the full draft, not just an appended note\n- Integrate the new answer into the most relevant part of the draft\n- Keep the structure aligned with the research plan\n- Remove redundancy where possible\n- If uncertainty remains, express it cautiously\n- Do not include citations or URLs\n- Return only the revised draft report in Markdown",
-                    previous_draft.revision,
-                    previous_draft.content,
-                    latest_step.question.focus,
-                    latest_step.question.text,
-                    latest_step.answer.summary
-                ),
-            ),
+            user_message(format!(
+                "Revise the current draft report for the following query.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nCurrent draft (revision {}):\n{}\n\nLatest retrieved question-answer pair:\nFocus: {}\nQuestion: {}\nAnswer: {}\n\nAll question-answer history:\n{history_text}\n\nRequirements:\n- Write in Japanese\n- Revise the full draft, not just an appended note\n- Integrate the new answer into the most relevant part of the draft\n- Keep the structure aligned with the research plan\n- Remove redundancy where possible\n- If uncertainty remains, express it cautiously\n- Do not include citations or URLs\n- Return only the revised draft report in Markdown",
+                previous_draft.revision,
+                previous_draft.content,
+                latest_step.question.focus,
+                latest_step.question.text,
+                latest_step.answer.summary
+            )),
         ];
 
         let revised_content = self.llm_provider.response(messages, &self.model).await?;
@@ -310,17 +302,13 @@ where
         };
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "You are a research coverage evaluator. Decide whether the research plan has been adequately covered by the current draft and the accumulated question-answer history. Evaluate coverage section by section before making the final decision.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "Evaluate whether the research loop can stop.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nCurrent draft:\n{}\n\nQuestion-answer history:\n{history_text}\n\nRequirements:\n- Evaluate each research plan section against the current draft and history\n- List every section that is still insufficiently covered in `uncovered_sections`\n- Be conservative; if any important section remains underdeveloped, do not stop\n- `should_exit` should be true only when the plan is adequately covered overall\n- Return JSON only",
-                    draft.content
-                ),
-            ),
+            user_message(format!(
+                "Evaluate whether the research loop can stop.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nCurrent draft:\n{}\n\nQuestion-answer history:\n{history_text}\n\nRequirements:\n- Evaluate each research plan section against the current draft and history\n- List every section that is still insufficiently covered in `uncovered_sections`\n- Be conservative; if any important section remains underdeveloped, do not stop\n- `should_exit` should be true only when the plan is adequately covered overall\n- Return JSON only",
+                draft.content
+            )),
         ];
 
         let value = self
@@ -413,16 +401,12 @@ where
         };
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "You are a research planning assistant. Create an initial research plan for the user's query.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "Create an initial research plan for the following query.\n\nQuery: {query}\n\nRequirements:\n- Identify the necessary research angles needed to investigate the query thoroughly\n- Avoid redundant or overlapping items\n- Write each plan item concisely in Japanese\n- Return JSON only\n- The output format must be an array of strings"
-                ),
-            ),
+            user_message(format!(
+                "Create an initial research plan for the following query.\n\nQuery: {query}\n\nRequirements:\n- Identify the necessary research angles needed to investigate the query thoroughly\n- Avoid redundant or overlapping items\n- Write each plan item concisely in Japanese\n- Return JSON only\n- The output format must be an array of strings"
+            )),
         ];
 
         let value = self
@@ -475,16 +459,12 @@ where
         };
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "You are a research plan critic. Review the research plan and identify weaknesses, omissions, redundancy, or poor prioritization.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "Critique the following research plan.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nRequirements:\n- Identify important missing research angles if any\n- Identify redundancy or overlap if any\n- Identify unclear or weakly phrased items if any\n- Be concise but specific\n- Return JSON only"
-                ),
-            ),
+            user_message(format!(
+                "Critique the following research plan.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nRequirements:\n- Identify important missing research angles if any\n- Identify redundancy or overlap if any\n- Identify unclear or weakly phrased items if any\n- Be concise but specific\n- Return JSON only"
+            )),
         ];
 
         let value = self
@@ -535,16 +515,12 @@ where
         };
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "You are a research planning assistant. Revise the initial research plan using the critique and produce a better plan.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "Revise the following research plan.\n\nQuery: {query}\n\nInitial research plan:\n{initial_plan_text}\n\nCritique:\n{critique}\n\nRequirements:\n- Keep the plan concise\n- Remove redundancy\n- Add important missing angles if needed\n- Improve clarity and prioritization\n- Write each plan item in Japanese\n- Return JSON only\n- The output format must be an array of strings"
-                ),
-            ),
+            user_message(format!(
+                "Revise the following research plan.\n\nQuery: {query}\n\nInitial research plan:\n{initial_plan_text}\n\nCritique:\n{critique}\n\nRequirements:\n- Keep the plan concise\n- Remove redundancy\n- Add important missing angles if needed\n- Improve clarity and prioritization\n- Write each plan item in Japanese\n- Return JSON only\n- The output format must be an array of strings"
+            )),
         ];
 
         let value = self
@@ -606,17 +582,13 @@ where
         };
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "You are a research answer synthesis assistant. Read the retrieved search results and produce a concise, accurate answer in Japanese. Do not invent facts beyond the provided search results. If the evidence is weak or incomplete, say so clearly.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "Synthesize an answer for the following research question.\n\nUser query: {query}\nFocus: {}\nQuestion: {}\n\nRetrieved search results:\n{}\n\nAdditional instruction:\n- {}\n\nRequirements:\n- Write in Japanese\n- Use only the retrieved search results\n- Be concise but informative\n- Prefer concrete and verifiable details\n- If the evidence is incomplete or conflicting, state that clearly\n- Do not output Markdown headings",
-                    question.focus, question.text, documents_text, variation_hint,
-                ),
-            ),
+            user_message(format!(
+                "Synthesize an answer for the following research question.\n\nUser query: {query}\nFocus: {}\nQuestion: {}\n\nRetrieved search results:\n{}\n\nAdditional instruction:\n- {}\n\nRequirements:\n- Write in Japanese\n- Use only the retrieved search results\n- Be concise but informative\n- Prefer concrete and verifiable details\n- If the evidence is incomplete or conflicting, state that clearly\n- Do not output Markdown headings",
+                question.focus, question.text, documents_text, variation_hint,
+            )),
         ];
 
         let summary = self.llm_provider.response(messages, &self.model).await?;
@@ -635,17 +607,13 @@ where
         let answer_list = format_answer_candidates(candidates);
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "Your task is to research a topic and try to fulfill the user query. You are given a list of candidate answers. Combine them into a single answer so that it best fulfills the initial user query. If there is conflicting information, try to reconcile it in a logically sound way. Use only the candidate answers. The final answer must be written in Japanese.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "User query:\n{query}\n\nResearch focus:\n{}\n\nResearch question:\n{}\n\nCandidate answers:\n{}\n\nRequirements:\n- Write in Japanese\n- Merge the candidate answers into a single best answer\n- Use only the candidate answers above\n- Reconcile conflicts carefully when possible\n- If uncertainty remains, say so clearly\n- Do not output Markdown headings",
-                    question.focus, question.text, answer_list
-                ),
-            ),
+            user_message(format!(
+                "User query:\n{query}\n\nResearch focus:\n{}\n\nResearch question:\n{}\n\nCandidate answers:\n{}\n\nRequirements:\n- Write in Japanese\n- Merge the candidate answers into a single best answer\n- Use only the candidate answers above\n- Reconcile conflicts carefully when possible\n- If uncertainty remains, say so clearly\n- Do not output Markdown headings",
+                question.focus, question.text, answer_list
+            )),
         ];
 
         let summary = self.llm_provider.response(messages, &self.model).await?;
@@ -745,17 +713,13 @@ where
         };
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "You are a research question generation assistant. Generate a candidate next research question that addresses an important remaining gap in the current draft.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "Generate a candidate next research question for the following query.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nCurrent draft (revision {}):\n{}\n\nPrevious question-answer history:\n{history_text}\n\nAdditional instruction:\n- {variation_hint}\n\nRequirements:\n- Identify an important remaining information gap in the current draft\n- Use the research plan to stay on track\n- Avoid repeating already covered questions\n- Return exactly one candidate question\n- Write both `focus` and `text` in Japanese\n- The question will be used for web search, so `text` must be concise and searchable\n- Prefer a single focused information need rather than a multi-part question\n- Avoid long explanations, subclauses, or excessive detail\n- Keep `text` under 200 characters\n- Return JSON only",
-                    draft.revision, draft.content
-                ),
-            ),
+            user_message(format!(
+                "Generate a candidate next research question for the following query.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nCurrent draft (revision {}):\n{}\n\nPrevious question-answer history:\n{history_text}\n\nAdditional instruction:\n- {variation_hint}\n\nRequirements:\n- Identify an important remaining information gap in the current draft\n- Use the research plan to stay on track\n- Avoid repeating already covered questions\n- Return exactly one candidate question\n- Write both `focus` and `text` in Japanese\n- The question will be used for web search, so `text` must be concise and searchable\n- Prefer a single focused information need rather than a multi-part question\n- Avoid long explanations, subclauses, or excessive detail\n- Keep `text` under 200 characters\n- Return JSON only",
+                draft.revision, draft.content
+            )),
         ];
 
         let value = self
@@ -857,17 +821,13 @@ where
             .join("\n\n");
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "You are a research question selector. Choose the single best next question from the candidate list.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "Select the best next research question for the following query.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nCurrent draft (revision {}):\n{}\n\nPrevious question-answer history:\n{history_text}\n\nCandidate questions:\n{candidate_text}\n\nRequirements:\n- Choose the candidate that best addresses the most important remaining gap\n- Prefer novelty and coverage\n- Prefer a candidate that is concise and effective for web search\n- Avoid candidates that are overly long, multi-part, or difficult to search directly\n- Avoid repetition\n- Return JSON only",
-                    draft.revision, draft.content
-                ),
-            ),
+            user_message(format!(
+                "Select the best next research question for the following query.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nCurrent draft (revision {}):\n{}\n\nPrevious question-answer history:\n{history_text}\n\nCandidate questions:\n{candidate_text}\n\nRequirements:\n- Choose the candidate that best addresses the most important remaining gap\n- Prefer novelty and coverage\n- Prefer a candidate that is concise and effective for web search\n- Avoid candidates that are overly long, multi-part, or difficult to search directly\n- Avoid repetition\n- Return JSON only",
+                draft.revision, draft.content
+            )),
         ];
 
         let value = self
@@ -935,17 +895,13 @@ where
         let revision_history_text = format_revision_history(revision_history);
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "You are a final report writing assistant. Write a comprehensive, coherent final report for the user's query. The report must be written in Japanese. Use the research plan, the current denoised draft, the accumulated question-answer history, and the revision history of the draft. Do not invent citations, URLs, or unsupported facts.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "Write the final report for the following query.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nCurrent denoised draft (revision {}):\n{}\n\nAccumulated question-answer history:\n{history_text}\n\nRevision history:\n{revision_history_text}\n\nRequirements:\n- Write in Japanese\n- Produce a coherent final report, not notes or bullet fragments\n- Use the research plan as the overall structure\n- Use the current draft as the primary backbone\n- Use the revision history to preserve how the report evolved over time\n- Incorporate the verified or synthesized information from the question-answer history\n- Prefer integrating information into a globally coherent report rather than writing each section independently\n- Remove redundancy and resolve inconsistencies where possible\n- If uncertainty remains, state it cautiously rather than pretending it is confirmed\n- Do not include citations or URLs\n- Return only the final report in Markdown",
-                    draft.revision, draft.content
-                ),
-            ),
+            user_message(format!(
+                "Write the final report for the following query.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nCurrent denoised draft (revision {}):\n{}\n\nAccumulated question-answer history:\n{history_text}\n\nRevision history:\n{revision_history_text}\n\nRequirements:\n- Write in Japanese\n- Produce a coherent final report, not notes or bullet fragments\n- Use the research plan as the overall structure\n- Use the current draft as the primary backbone\n- Use the revision history to preserve how the report evolved over time\n- Incorporate the verified or synthesized information from the question-answer history\n- Prefer integrating information into a globally coherent report rather than writing each section independently\n- Remove redundancy and resolve inconsistencies where possible\n- If uncertainty remains, state it cautiously rather than pretending it is confirmed\n- Do not include citations or URLs\n- Return only the final report in Markdown",
+                draft.revision, draft.content
+            )),
         ];
 
         let report = self.llm_provider.response(messages, &self.model).await?;
@@ -983,16 +939,12 @@ where
         };
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "You are a final report critic. Review the report and identify weaknesses in coverage, coherence, redundancy, unsupported claims, or organization.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "Critique the following final report.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nReport:\n{report}\n\nRequirements:\n- Identify missing coverage relative to the research plan if any\n- Identify redundancy or poor organization if any\n- Identify unsupported or weakly justified claims if any\n- Be concise but specific\n- Return JSON only"
-                ),
-            ),
+            user_message(format!(
+                "Critique the following final report.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nReport:\n{report}\n\nRequirements:\n- Identify missing coverage relative to the research plan if any\n- Identify redundancy or poor organization if any\n- Identify unsupported or weakly justified claims if any\n- Be concise but specific\n- Return JSON only"
+            )),
         ];
 
         let value = self
@@ -1031,16 +983,12 @@ where
             .join("\n");
 
         let messages = vec![
-            Message::text(
-                Role::System,
+            system_message(
                 "You are a final report writing assistant. Revise the report using the critique and produce a better final report.",
             ),
-            Message::text(
-                Role::User,
-                format!(
-                    "Revise the following final report.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nInitial final report:\n{initial_report}\n\nCritique:\n{critique}\n\nRequirements:\n- Write in Japanese\n- Preserve the useful content of the report while improving it\n- Improve coverage relative to the research plan if needed\n- Remove redundancy and improve organization\n- Resolve weak or unsupported statements where possible\n- If uncertainty remains, state it cautiously\n- Do not include citations or URLs\n- Return only the revised final report in Markdown"
-                ),
-            ),
+            user_message(format!(
+                "Revise the following final report.\n\nQuery: {query}\n\nResearch plan:\n{plan_text}\n\nInitial final report:\n{initial_report}\n\nCritique:\n{critique}\n\nRequirements:\n- Write in Japanese\n- Preserve the useful content of the report while improving it\n- Improve coverage relative to the research plan if needed\n- Remove redundancy and improve organization\n- Resolve weak or unsupported statements where possible\n- If uncertainty remains, state it cautiously\n- Do not include citations or URLs\n- Return only the revised final report in Markdown"
+            )),
         ];
 
         let report = self.llm_provider.response(messages, &self.model).await?;
@@ -1110,4 +1058,13 @@ fn shorten_for_progress(text: &str, max_chars: usize) -> String {
     } else {
         shortened
     }
+}
+
+fn system_message(text: impl Into<String>) -> Message {
+    Message::new(Role::System, vec![MessageContent::InputText(text.into())])
+        .expect("system message helper builds a valid single-content message")
+}
+
+fn user_message(text: impl Into<String>) -> Message {
+    Message::input_text(text).expect("user message helper builds a valid single-content message")
 }

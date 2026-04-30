@@ -1,6 +1,5 @@
 use crate::domain::error::agent_error::AgentError;
 use crate::domain::model::message::{Message, MessageContent};
-use crate::domain::model::role::Role;
 use crate::domain::model::token_usage::TokenUsage;
 use crate::domain::port::llm_provider::LlmProvider;
 
@@ -9,14 +8,14 @@ const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 1_000_000;
 const DEFAULT_COMPACTION_THRESHOLD_PERCENT: u64 = 80;
 const RECENT_MESSAGES_TO_KEEP: usize = 8;
 
-pub struct ContextService<L> {
+pub struct CompactionService<L> {
     llm_provider: L,
     model: String,
     context_window_tokens: u64,
     compaction_threshold_percent: u64,
 }
 
-impl<L: LlmProvider> ContextService<L> {
+impl<L: LlmProvider> CompactionService<L> {
     pub fn new(llm_provider: L) -> Self {
         Self {
             llm_provider,
@@ -40,7 +39,7 @@ impl<L: LlmProvider> ContextService<L> {
         }
     }
 
-    pub async fn build_context(
+    pub async fn compact_if_needed(
         &self,
         history: Vec<Message>,
         latest_usage: Option<TokenUsage>,
@@ -94,14 +93,13 @@ Conversation history:\n{old_text}"
 
         let summary = self
             .llm_provider
-            .response(vec![Message::text(Role::User, summary_prompt)], &self.model)
+            .response(vec![Message::input_text(summary_prompt)?], &self.model)
             .await?;
 
         let mut compacted = Vec::with_capacity(recent_messages.len() + 1);
-        compacted.push(Message::text(
-            Role::Assistant,
-            format!("Conversation summary so far:\n{summary}"),
-        ));
+        compacted.push(Message::output_text(format!(
+            "Conversation summary so far:\n{summary}"
+        ))?);
         compacted.extend(recent_messages);
 
         Ok(compacted)
@@ -117,41 +115,43 @@ fn format_message_for_summary(message: &Message) -> String {
 }
 
 fn format_message_content_for_summary(message: &Message) -> String {
-    match &message.content {
-        MessageContent::Text(text) => text.clone(),
+    message
+        .contents
+        .iter()
+        .map(format_content_for_summary)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
-        MessageContent::Multimodal { text, attachments } => {
-            let filenames = attachments
-                .iter()
-                .map(|attachment| attachment.filename.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            if filenames.is_empty() {
-                text.clone()
-            } else {
-                format!("{text}\nattachments: {filenames}")
-            }
+fn format_content_for_summary(content: &MessageContent) -> String {
+    match content {
+        MessageContent::InputText(text) | MessageContent::OutputText(text) => text.clone(),
+        MessageContent::InputImage(image) => {
+            format!(
+                "input_image: {} ({} bytes)",
+                image.mime_type,
+                image.data.len()
+            )
         }
-
-        MessageContent::ToolCall { text, tool_calls } => {
-            let tool_names = tool_calls
-                .iter()
-                .map(|call| call.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            match text {
-                Some(text) if !tool_names.is_empty() => {
-                    format!("{text}\ntool_calls: {tool_names}")
-                }
-                Some(text) => text.clone(),
-                None => format!("tool_calls: {tool_names}"),
-            }
+        MessageContent::InputFile(file) => {
+            format!(
+                "input_file: {} ({}, {} bytes)",
+                file.filename,
+                file.mime_type,
+                file.data.len()
+            )
         }
-
-        MessageContent::ToolResults(tool_results) => {
-            format!("tool_results: {} result(s)", tool_results.len())
+        MessageContent::ToolCall(call) => {
+            format!(
+                "tool_call: {} call_id={} arguments={}",
+                call.name, call.call_id, call.arguments
+            )
+        }
+        MessageContent::ToolCallOutput(output) => {
+            format!(
+                "tool_call_output: call_id={} status={:?} output={}",
+                output.call_id, output.status, output.output
+            )
         }
     }
 }

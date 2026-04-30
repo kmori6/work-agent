@@ -1,6 +1,6 @@
 use crate::domain::error::tool_error::ToolError;
-use crate::domain::model::tool::ToolExecutionResult;
 use crate::domain::port::tool::Tool;
+use crate::domain::port::tool::ToolOutput;
 use crate::infrastructure::util::path::{contains_parent_dir, normalize_path};
 use async_trait::async_trait;
 use glob::{MatchOptions, Pattern};
@@ -75,7 +75,7 @@ impl Tool for TextSearchTool {
         })
     }
 
-    async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError> {
+    async fn execute(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
         let query = arguments
             .get("query")
             .and_then(|v| v.as_str())
@@ -220,7 +220,7 @@ impl Tool for TextSearchTool {
             }
         }
 
-        Ok(ToolExecutionResult::success(json!({
+        Ok(ToolOutput::success(json!({
             "total_matches": total_matches,
             "matches": matches
         })))
@@ -242,6 +242,8 @@ fn build_snippet(lines: &[&str], line_index: usize, context_lines: usize) -> Str
 
 #[cfg(test)]
 mod tests {
+    use crate::domain::model::tool_call::ToolCallOutputStatus;
+
     use super::*;
     use serde_json::json;
     use std::fs;
@@ -270,7 +272,7 @@ mod tests {
 
         let result = tool.execute(json!({ "query": "fn main" })).await.unwrap();
 
-        assert!(!result.is_error);
+        assert_eq!(result.status, ToolCallOutputStatus::Success);
         assert_eq!(result.output["total_matches"], json!(1));
         assert_eq!(result.output["matches"][0]["path"], json!("src/main.rs"));
         assert_eq!(result.output["matches"][0]["line_number"], json!(1));

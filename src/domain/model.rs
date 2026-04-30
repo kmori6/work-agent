@@ -1,12 +1,13 @@
-pub mod attachment;
 pub mod chat_message;
 pub mod chat_session;
+pub mod input_file;
+pub mod input_image;
 pub mod memory_index;
 pub mod message;
 pub mod role;
 pub mod token_usage;
-pub mod tool;
 pub mod tool_approval;
+pub mod tool_call;
 pub mod tool_execution_decision;
 pub mod tool_execution_policy;
 pub mod tool_execution_rule;

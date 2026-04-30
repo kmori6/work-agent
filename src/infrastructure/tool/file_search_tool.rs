@@ -1,6 +1,6 @@
 use crate::domain::error::tool_error::ToolError;
-use crate::domain::model::tool::ToolExecutionResult;
 use crate::domain::port::tool::Tool;
+use crate::domain::port::tool::ToolOutput;
 use crate::infrastructure::util::path::{contains_parent_dir, normalize_path};
 use async_trait::async_trait;
 use glob::{MatchOptions, glob_with};
@@ -54,7 +54,7 @@ impl Tool for FileSearchTool {
         })
     }
 
-    async fn execute(&self, arguments: Value) -> Result<ToolExecutionResult, ToolError> {
+    async fn execute(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
         let pattern = arguments
             .get("pattern")
             .and_then(|v| v.as_str())
@@ -121,7 +121,7 @@ impl Tool for FileSearchTool {
         let truncated = total_matches > self.max_results;
         matches.truncate(self.max_results);
 
-        Ok(ToolExecutionResult::success(json!({
+        Ok(ToolOutput::success(json!({
             "pattern": pattern,
             "total_matches": total_matches,
             "matches": matches,
@@ -132,6 +132,8 @@ impl Tool for FileSearchTool {
 
 #[cfg(test)]
 mod tests {
+    use crate::domain::model::tool_call::ToolCallOutputStatus;
+
     use super::*;
     use serde_json::json;
     use std::fs;
@@ -167,7 +169,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!result.is_error);
+        assert_eq!(result.status, ToolCallOutputStatus::Success);
         assert_eq!(
             result.output["matches"],
             json!(["src/lib.rs", "src/main.rs"])
