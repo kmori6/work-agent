@@ -36,7 +36,7 @@ pub enum ChatSessionEvent {
         session_id: Uuid,
         call_id: String,
         tool_name: String,
-        arguments: serde_json::Value,
+        arguments: Value,
         policy: ToolExecutionPolicy,
     },
     ToolCallApprovalResolved {

@@ -10,9 +10,11 @@ use uuid::Uuid;
 
 use crate::application::usecase::agent_usecase::Attachment;
 use crate::application::usecase::agent_usecase::{
-    AgentEvent, AgentStartTurnOutput, AgentUsecase, HandleAgentInput, HandleAgentOutput,
+    AgentStartTurnOutput, AgentUsecase, HandleAgentInput, HandleAgentOutput,
 };
 use crate::application::usecase::tool_execution_rule_usecase::ToolExecutionRuleUsecase;
+use crate::domain::model::chat_session_event::ChatSessionEvent;
+use crate::domain::model::tool_call::ToolCallOutputStatus;
 use crate::domain::port::llm_provider::LlmProvider;
 use crate::domain::repository::awaiting_tool_approval_repository::AwaitingToolApprovalRepository;
 use crate::domain::repository::chat_message_repository::ChatMessageRepository;
@@ -20,7 +22,6 @@ use crate::domain::repository::chat_session_repository::ChatSessionRepository;
 use crate::domain::repository::token_usage_repository::TokenUsageRepository;
 use crate::domain::repository::tool_approval_repository::ToolApprovalRepository;
 use crate::domain::repository::tool_execution_rule_repository::ToolExecutionRuleRepository;
-use crate::domain::service::agent_service::AgentEvent as AgentProgressEvent;
 use crate::presentation::command::agent_command::{AgentCommand, parse_command, shell_words};
 use crate::presentation::error::agent_cli_error::AgentCliError;
 use crate::presentation::util::attachment::load_attachment;
@@ -556,11 +557,11 @@ fn file_name(path: &Path) -> String {
 
 async fn run_with_progress<F, Fut, E, O>(make_future: F) -> Result<(O, bool), AgentCliError>
 where
-    F: FnOnce(tokio::sync::mpsc::Sender<AgentProgressEvent>) -> Fut,
+    F: FnOnce(tokio::sync::mpsc::Sender<ChatSessionEvent>) -> Fut,
     Fut: Future<Output = Result<O, E>>,
     AgentCliError: From<E>,
 {
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentProgressEvent>(32);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<ChatSessionEvent>(32);
     let fut = make_future(tx);
     tokio::pin!(fut);
 
@@ -585,27 +586,33 @@ where
     Ok(output)
 }
 
-fn handle_progress_event(event: AgentProgressEvent, reporter: &mut ProgressReporter) {
+fn handle_progress_event(event: ChatSessionEvent, reporter: &mut ProgressReporter) {
     match event {
-        AgentProgressEvent::LlmStarted => {
+        ChatSessionEvent::LlmStarted { .. } => {
             reporter.start_thinking();
         }
-        AgentProgressEvent::LlmFinished => {
+        ChatSessionEvent::LlmFinished { .. } => {
             reporter.stop_thinking();
         }
-        AgentProgressEvent::ToolStarted { tool_name, call_id } => {
+        ChatSessionEvent::ToolCallStarted {
+            tool_name, call_id, ..
+        } => {
             reporter.println(format!("[tool call] {tool_name} ({call_id})"));
         }
-        AgentProgressEvent::ToolFinished {
+        ChatSessionEvent::ToolCallFinished {
             tool_name,
             call_id,
-            success,
+            status,
+            ..
         } => {
-            reporter.println(format!(
-                "[tool result] {tool_name} ({call_id}): {}",
-                if success { "success" } else { "failed" }
-            ));
+            let status = match status {
+                ToolCallOutputStatus::Success => "success",
+                ToolCallOutputStatus::Error => "failed",
+            };
+
+            reporter.println(format!("[tool result] {tool_name} ({call_id}): {status}"));
         }
+        _ => {}
     }
 }
 
@@ -627,20 +634,18 @@ fn apply_start_turn_output(output: AgentStartTurnOutput, mut separate_from_progr
     print_agent_events(&output.events, &mut separate_from_progress);
 }
 
-fn print_agent_events(events: &[AgentEvent], separate_from_progress: &mut bool) {
+fn print_agent_events(events: &[ChatSessionEvent], separate_from_progress: &mut bool) {
     for event in events {
         match event {
-            AgentEvent::AssistantMessage(msg) => {
-                if !msg.is_empty() {
-                    if *separate_from_progress {
-                        println!();
-                        *separate_from_progress = false;
-                    }
-                    println!("{ASSISTANT_LABEL}");
-                    print_text(msg);
+            ChatSessionEvent::AssistantMessageCreated { content, .. } if !content.is_empty() => {
+                if *separate_from_progress {
+                    println!();
+                    *separate_from_progress = false;
                 }
+                println!("{ASSISTANT_LABEL}");
+                print_text(content);
             }
-            AgentEvent::ToolConfirmationRequested {
+            ChatSessionEvent::ToolCallApprovalRequested {
                 tool_name,
                 arguments,
                 ..
@@ -656,6 +661,7 @@ fn print_agent_events(events: &[AgentEvent], separate_from_progress: &mut bool) 
                     "[confirmation requested] {tool_name}\n{preview}\nRun /approve to execute, or /deny to cancel."
                 );
             }
+            _ => {}
         }
     }
 }

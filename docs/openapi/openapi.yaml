@@ -2,11 +2,27 @@ openapi: 3.1.0
 info:
   title: Commander Gateway API
   version: 0.1.0
+  description: Simple HTTP API for chat sessions, messages, and tool approvals.
+
+tags:
+  - name: Health
+    description: Server status.
+  - name: Sessions
+    description: Chat session APIs.
+  - name: Messages
+    description: Chat message APIs.
+  - name: Approvals
+    description: Tool approval APIs.
+  - name: Events
+    description: Server-sent event APIs.
 
 paths:
   /v1/health:
     get:
+      tags:
+        - Health
       summary: Check server health
+      description: Returns a small response when the server is running.
       operationId: getHealth
       responses:
         "200":
@@ -16,9 +32,64 @@ paths:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
 
+  /v1/events:
+    get:
+      tags:
+        - Events
+      summary: Subscribe to chat session events
+      description: |
+        Opens a server-sent event stream. Message and approval requests publish agent events to this stream.
+
+        Event names:
+        - agent_turn_started
+        - llm_started
+        - llm_finished
+        - tool_call_started
+        - tool_call_finished
+        - assistant_message_created
+        - tool_call_approval_requested
+        - tool_call_approval_resolved
+        - agent_turn_completed
+        - agent_turn_failed
+
+        The stream also sends keep-alive comments.
+      operationId: createEventStream
+      responses:
+        "200":
+          description: Chat session event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-sent events. Each event has an event name and JSON data.
+              examples:
+                agentTurnStarted:
+                  summary: Agent turn started
+                  value: |
+                    event: agent_turn_started
+                    data: {"session_id":"00000000-0000-0000-0000-000000000000"}
+                assistantMessageCreated:
+                  summary: Assistant message created
+                  value: |
+                    event: assistant_message_created
+                    data: {"session_id":"00000000-0000-0000-0000-000000000000","message_id":"11111111-1111-1111-1111-111111111111","content":"Hello"}
+                toolCallApprovalRequested:
+                  summary: Tool approval requested
+                  value: |
+                    event: tool_call_approval_requested
+                    data: {"session_id":"00000000-0000-0000-0000-000000000000","call_id":"call_123","tool_name":"shell_exec","arguments":{"cmd":"pwd"},"policy":"ask"}
+                toolCallFinished:
+                  summary: Tool call finished
+                  value: |
+                    event: tool_call_finished
+                    data: {"session_id":"00000000-0000-0000-0000-000000000000","call_id":"call_123","tool_name":"shell_exec","output":{"stdout":"/workspace"},"status":"success"}
+
   /v1/sessions:
     get:
+      tags:
+        - Sessions
       summary: List chat sessions
+      description: Returns recent chat sessions.
       operationId: listSessions
       parameters:
         - name: limit
@@ -27,7 +98,7 @@ paths:
           description: Maximum number of sessions to return
           schema:
             type: integer
-            minimum: 1
+            minimum: 0
             maximum: 100
             default: 20
       responses:
@@ -45,7 +116,10 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
 
     post:
+      tags:
+        - Sessions
       summary: Create a chat session
+      description: Creates a new chat session.
       operationId: createSession
       responses:
         "201":
@@ -63,7 +137,10 @@ paths:
 
   /v1/sessions/{id}:
     get:
+      tags:
+        - Sessions
       summary: Get a chat session
+      description: Returns one chat session.
       operationId: getSession
       parameters:
         - name: id
@@ -94,7 +171,10 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
 
     delete:
+      tags:
+        - Sessions
       summary: Delete a chat session
+      description: Deletes one chat session.
       operationId: deleteSession
       parameters:
         - name: id
@@ -122,7 +202,10 @@ paths:
 
   /v1/sessions/{id}/messages:
     get:
+      tags:
+        - Messages
       summary: List chat messages in a session
+      description: Returns messages in a session. Saved input images and files are not returned.
       operationId: listSessionMessages
       parameters:
         - name: id
@@ -138,7 +221,7 @@ paths:
           description: Maximum number of latest messages to return. If omitted, all messages are returned.
           schema:
             type: integer
-            minimum: 1
+            minimum: 0
       responses:
         "200":
           description: Chat messages
@@ -158,6 +241,90 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+    post:
+      tags:
+        - Messages
+      summary: Create a user message
+      description: Saves a user message and starts the agent turn in the background.
+      operationId: createMessage
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Chat session ID
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMessageRequest"
+      responses:
+        "202":
+          description: The message was saved. The agent turn was accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateMessageResponse"
+        "500":
+          description: Failed to create message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/approvals:
+    get:
+      tags:
+        - Approvals
+      summary: List approvals
+      description: Returns tool approvals that are waiting for a decision.
+      operationId: listApprovals
+      responses:
+        "200":
+          description: Approvals were returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListApprovalsResponse"
+        "500":
+          description: Failed to list approvals
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/approvals/{session_id}:
+    post:
+      tags:
+        - Approvals
+      summary: Resolve an approval
+      description: Accepts or denies the waiting tool approval for a session.
+      operationId: resolveApproval
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          description: Chat session ID
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveApprovalRequest"
+      responses:
+        "202":
+          description: The approval decision was accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolveApprovalResponse"
 
 components:
   schemas:
@@ -251,25 +418,42 @@ components:
           items:
             $ref: "#/components/schemas/ChatMessage"
 
+    CreateMessageRequest:
+      type: object
+      required:
+        - user_message
+      properties:
+        user_message:
+          $ref: "#/components/schemas/UserMessage"
+
+    UserMessage:
+      type: object
+      description: The role must be user. The content must include input_text.
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+          enum:
+            - user
+        content:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/UserMessageContent"
+      example:
+        role: user
+        content:
+          - type: input_text
+            text: Hello
+
     ChatMessage:
-      oneOf:
-        - $ref: "#/components/schemas/TextChatMessage"
-        - $ref: "#/components/schemas/ToolCallChatMessage"
-        - $ref: "#/components/schemas/ToolResultsChatMessage"
-      discriminator:
-        propertyName: kind
-        mapping:
-          text: "#/components/schemas/TextChatMessage"
-          tool_call: "#/components/schemas/ToolCallChatMessage"
-          tool_results: "#/components/schemas/ToolResultsChatMessage"
-
-    TextChatMessage:
       type: object
       required:
         - id
         - role
-        - kind
-        - text
+        - contents
         - created_at
       properties:
         id:
@@ -277,66 +461,10 @@ components:
           format: uuid
         role:
           $ref: "#/components/schemas/ChatMessageRole"
-        kind:
-          type: string
-          enum:
-            - text
-        text:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-
-    ToolCallChatMessage:
-      type: object
-      required:
-        - id
-        - role
-        - kind
-        - tool_calls
-        - created_at
-      properties:
-        id:
-          type: string
-          format: uuid
-        role:
-          $ref: "#/components/schemas/ChatMessageRole"
-        kind:
-          type: string
-          enum:
-            - tool_call
-        text:
-          type: string
-        tool_calls:
+        contents:
           type: array
           items:
-            $ref: "#/components/schemas/ToolCall"
-        created_at:
-          type: string
-          format: date-time
-
-    ToolResultsChatMessage:
-      type: object
-      required:
-        - id
-        - role
-        - kind
-        - tool_results
-        - created_at
-      properties:
-        id:
-          type: string
-          format: uuid
-        role:
-          $ref: "#/components/schemas/ChatMessageRole"
-        kind:
-          type: string
-          enum:
-            - tool_results
-        tool_results:
-          type: array
-          items:
-            $ref: "#/components/schemas/ToolResult"
+            $ref: "#/components/schemas/StoredMessageContent"
         created_at:
           type: string
           format: date-time
@@ -347,35 +475,199 @@ components:
         - system
         - user
         - assistant
-        - tool
 
-    ToolCall:
+    UserMessageContent:
+      oneOf:
+        - $ref: "#/components/schemas/InputTextContent"
+        - $ref: "#/components/schemas/InputImageContent"
+        - $ref: "#/components/schemas/InputFileContent"
+      discriminator:
+        propertyName: type
+        mapping:
+          input_text: "#/components/schemas/InputTextContent"
+          input_image: "#/components/schemas/InputImageContent"
+          input_file: "#/components/schemas/InputFileContent"
+
+    StoredMessageContent:
+      oneOf:
+        - $ref: "#/components/schemas/InputTextContent"
+        - $ref: "#/components/schemas/OutputTextContent"
+        - $ref: "#/components/schemas/ToolCallContent"
+        - $ref: "#/components/schemas/ToolCallOutputContent"
+      discriminator:
+        propertyName: type
+        mapping:
+          input_text: "#/components/schemas/InputTextContent"
+          output_text: "#/components/schemas/OutputTextContent"
+          tool_call: "#/components/schemas/ToolCallContent"
+          tool_call_output: "#/components/schemas/ToolCallOutputContent"
+
+    InputTextContent:
       type: object
       required:
-        - id
-        - name
+        - type
+        - text
+      properties:
+        type:
+          type: string
+          enum:
+            - input_text
+        text:
+          type: string
+
+    InputImageContent:
+      type: object
+      required:
+        - type
+        - image_url
+      properties:
+        type:
+          type: string
+          enum:
+            - input_image
+        image_url:
+          type: string
+          description: Image URL or data URI.
+
+    InputFileContent:
+      type: object
+      required:
+        - type
+        - filename
+        - file_data
+      properties:
+        type:
+          type: string
+          enum:
+            - input_file
+        filename:
+          type: string
+        file_data:
+          type: string
+          description: File data URI.
+
+    OutputTextContent:
+      type: object
+      required:
+        - type
+        - text
+      properties:
+        type:
+          type: string
+          enum:
+            - output_text
+        text:
+          type: string
+
+    ToolCallContent:
+      type: object
+      required:
+        - type
+        - call_id
+        - tool_name
         - arguments
       properties:
-        id:
+        type:
           type: string
-        name:
+          enum:
+            - tool_call
+        call_id:
+          type: string
+        tool_name:
           type: string
         arguments:
           description: Tool arguments as JSON.
 
-    ToolResult:
+    ToolCallOutputContent:
       type: object
       required:
-        - tool_call_id
+        - type
+        - call_id
         - output
-        - is_error
+        - result_status
       properties:
-        tool_call_id:
+        type:
+          type: string
+          enum:
+            - tool_call_output
+        call_id:
           type: string
         output:
           description: Tool output as JSON.
-        is_error:
-          type: boolean
+        result_status:
+          type: string
+          enum:
+            - success
+            - error
+
+    CreateMessageResponse:
+      type: object
+      required:
+        - session_id
+        - message_id
+        - created_at
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        message_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    ListApprovalsResponse:
+      type: object
+      required:
+        - approvals
+      properties:
+        approvals:
+          type: array
+          items:
+            $ref: "#/components/schemas/AwaitingApproval"
+
+    AwaitingApproval:
+      type: object
+      required:
+        - session_id
+        - assistant_message_id
+        - tool_call_id
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        assistant_message_id:
+          type: string
+          format: uuid
+        tool_call_id:
+          type: string
+
+    ResolveApprovalRequest:
+      type: object
+      required:
+        - decision
+      properties:
+        decision:
+          $ref: "#/components/schemas/ApprovalDecision"
+
+    ResolveApprovalResponse:
+      type: object
+      required:
+        - session_id
+        - decision
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        decision:
+          $ref: "#/components/schemas/ApprovalDecision"
+
+    ApprovalDecision:
+      type: string
+      enum:
+        - approved
+        - denied
 
     ErrorResponse:
       type: object

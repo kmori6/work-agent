@@ -1,4 +1,4 @@
-use crate::domain::service::agent_service::AgentEvent as AgentProgressEvent;
+use crate::domain::model::chat_session_event::ChatSessionEvent;
 use crate::presentation::state::app_state::AppState;
 use axum::{
     Json,
@@ -41,30 +41,38 @@ pub async fn resolve_approval_handler(
     let decision_text = decision.as_str();
 
     let agent_usecase = state.agent_usecase.clone();
+    let event_service = state.event_service.clone();
 
     tokio::spawn(async move {
-        let (progress_tx, mut progress_rx) = mpsc::channel::<AgentProgressEvent>(32);
+        let (event_tx, mut event_rx) = mpsc::channel::<ChatSessionEvent>(32);
 
-        let progress_drain =
-            tokio::spawn(async move { while progress_rx.recv().await.is_some() {} });
+        let publisher_event_service = event_service.clone();
+        let event_publisher = tokio::spawn(async move {
+            while let Some(event) = event_rx.recv().await {
+                publisher_event_service.publish(event);
+            }
+        });
 
         let result = match decision {
             ApprovalDecisionRequest::Approved => {
-                agent_usecase
-                    .approve_approval(session_id, progress_tx)
-                    .await
+                agent_usecase.approve_approval(session_id, event_tx).await
             }
             ApprovalDecisionRequest::Denied => {
-                agent_usecase.deny_approval(session_id, progress_tx).await
+                agent_usecase.deny_approval(session_id, event_tx).await
             }
         };
 
         if let Err(err) = result {
             log::warn!("failed to resolve approval for session {session_id}: {err}");
+
+            event_service.publish(ChatSessionEvent::AgentTurnFailed {
+                session_id,
+                message: err.to_string(),
+            });
         }
 
-        if let Err(err) = progress_drain.await {
-            log::warn!("failed to drain approval progress for session {session_id}: {err}");
+        if let Err(err) = event_publisher.await {
+            log::warn!("failed to publish approval events for session {session_id}: {err}");
         }
     });
 

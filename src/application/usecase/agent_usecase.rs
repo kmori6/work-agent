@@ -3,30 +3,27 @@ use crate::domain::error::agent_error::AgentError;
 use crate::domain::model::awaiting_tool_approval::AwaitingToolApproval;
 use crate::domain::model::chat_message::ChatMessage;
 use crate::domain::model::chat_session::{ChatSession, ChatSessionStatus};
+use crate::domain::model::chat_session_event::ChatSessionEvent;
 use crate::domain::model::input_file::InputFile;
 use crate::domain::model::input_image::InputImage;
 use crate::domain::model::message::{Message, MessageContent};
 use crate::domain::model::role::Role;
 use crate::domain::model::token_usage::TokenUsage;
 use crate::domain::model::tool_approval::{ToolApproval, ToolApprovalDecision};
-use crate::domain::model::tool_call::{ToolCall, ToolCallOutput, ToolCallOutputStatus};
+use crate::domain::model::tool_call::{ToolCall, ToolCallOutput};
 use crate::domain::model::tool_execution_decision::ToolExecutionDecision;
 use crate::domain::port::llm_provider::{LlmProvider, LlmResponse};
-use crate::domain::port::tool::ToolExecutionPolicy;
 use crate::domain::repository::awaiting_tool_approval_repository::AwaitingToolApprovalRepository;
 use crate::domain::repository::chat_message_repository::ChatMessageRepository;
 use crate::domain::repository::chat_session_repository::ChatSessionRepository;
 use crate::domain::repository::token_usage_repository::TokenUsageRepository;
 use crate::domain::repository::tool_approval_repository::ToolApprovalRepository;
-use crate::domain::service::agent_service::{
-    AgentApprovalRequired, AgentEvent as AgentProgressEvent, AgentOutput, AgentService,
-};
+use crate::domain::service::agent_service::AgentService;
 use crate::domain::service::compaction_service::CompactionService;
 use crate::domain::service::instruction_service::InstructionService;
 use crate::domain::service::tool_service::ToolRuleSummary;
 use serde_json::json;
-use std::collections::HashMap;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 // Current agent turn flow.
@@ -105,7 +102,7 @@ pub struct HandleAgentInput {
 
 #[derive(Debug)]
 pub struct HandleAgentOutput {
-    pub events: Vec<AgentEvent>,
+    pub events: Vec<ChatSessionEvent>,
     pub usage: TokenUsage,
     pub context_input_tokens: u64,
     pub context_window_tokens: u64,
@@ -114,18 +111,7 @@ pub struct HandleAgentOutput {
 
 #[derive(Debug)]
 pub struct AgentStartTurnOutput {
-    pub events: Vec<AgentEvent>,
-}
-
-#[derive(Debug)]
-pub enum AgentEvent {
-    AssistantMessage(String),
-    ToolConfirmationRequested {
-        call_id: String,
-        tool_name: String,
-        arguments: serde_json::Value,
-        policy: ToolExecutionPolicy,
-    },
+    pub events: Vec<ChatSessionEvent>,
 }
 
 pub struct AgentUsecase<L, S, M, T, A, W> {
@@ -137,7 +123,6 @@ pub struct AgentUsecase<L, S, M, T, A, W> {
     token_usage_repository: T,
     tool_approval_repository: A,
     awaiting_tool_approval_repository: W,
-    pending_approvals: Mutex<HashMap<Uuid, AgentApprovalRequired>>,
 }
 
 impl<L, S, M, T, A, W> AgentUsecase<L, S, M, T, A, W>
@@ -168,7 +153,6 @@ where
             token_usage_repository,
             tool_approval_repository,
             awaiting_tool_approval_repository,
-            pending_approvals: Mutex::new(HashMap::new()),
         }
     }
 
@@ -225,7 +209,7 @@ where
         &self,
         session_id: Uuid,
         user_message: ChatMessage,
-        tx: mpsc::Sender<AgentProgressEvent>,
+        tx: mpsc::Sender<ChatSessionEvent>,
     ) -> Result<AgentStartTurnOutput, AgentUsecaseError> {
         let input_messages = self
             .load_compacted_input_messages(session_id, &user_message)
@@ -240,132 +224,32 @@ where
     pub async fn handle(
         &self,
         input: HandleAgentInput,
-        tx: mpsc::Sender<AgentProgressEvent>,
+        tx: mpsc::Sender<ChatSessionEvent>,
     ) -> Result<HandleAgentOutput, AgentUsecaseError> {
-        // 1. Reject new user input while a tool approval is pending.
-        {
-            let pending_approvals = self.pending_approvals.lock().await;
-            if pending_approvals.contains_key(&input.session_id) {
-                return Err(AgentUsecaseError::ApprovalPending(input.session_id));
-            }
-        }
-
-        // 2. Load conversation history and latest token usage.
-        let history_entries = self
-            .chat_message_repository
-            .list_for_session(input.session_id)
-            .await?;
-
-        let history = history_entries
-            .into_iter()
-            .map(|entry| entry.message)
-            .collect::<Vec<Message>>();
-
-        let last_usage = self
-            .token_usage_repository
-            .find_latest_for_session(input.session_id)
-            .await?;
-
-        // 3. Build the LLM context from the stored history.
-        let context_messages = self
-            .compaction_service
-            .compact_if_needed(history, last_usage)
-            .await?;
-
-        // 4. Build and save the new user message.
+        let session_id = input.session_id;
         let user_message = build_user_message(&input)?;
+        let saved_user_message = self.submit_user_message(session_id, user_message).await?;
+        let output = self.start_turn(session_id, saved_user_message, tx).await?;
 
-        self.chat_message_repository
-            .append(input.session_id, user_message.clone())
-            .await?;
+        let usage = self
+            .token_usage_repository
+            .find_latest_for_session(session_id)
+            .await?
+            .unwrap_or_default();
 
-        // 5. Run the agent with context + the new user message.
-        let mut agent_messages = context_messages;
-        agent_messages.push(user_message);
-
-        let instruction = self.instruction_service.build_agent_instruction();
-        let output = self
-            .agent_service
-            .start(instruction, agent_messages, tx)
-            .await?;
-
-        match output {
-            AgentOutput::Completed(completion) => {
-                // 6.1 Extract the final assistant text for the UI.
-                let final_text = final_assistant_text(&completion.messages).unwrap_or_default();
-
-                // 6.2 Save all agent-produced messages and remember the last saved message.
-                let message_count = completion.messages.len();
-                let mut last_message_id = None;
-
-                for (index, message) in completion.messages.into_iter().enumerate() {
-                    let saved_message = self
-                        .chat_message_repository
-                        .append(input.session_id, message)
-                        .await?;
-
-                    if index + 1 == message_count {
-                        last_message_id = Some(saved_message.id);
-                    }
-                }
-
-                // 6.3 Attach token usage to the last saved agent message.
-                if let Some(message_id) = last_message_id
-                    && !completion.usage.is_empty()
-                {
-                    self.token_usage_repository
-                        .record_for_message(
-                            message_id,
-                            self.agent_service.model(),
-                            completion.usage,
-                        )
-                        .await?;
-                }
-
-                // 6.4 Build and return the UI output for a completed run.
-                Ok(HandleAgentOutput {
-                    events: vec![AgentEvent::AssistantMessage(final_text)],
-                    usage: completion.usage,
-                    context_input_tokens: completion.usage.input_tokens,
-                    context_window_tokens: self.compaction_service.context_window_tokens(),
-                    context_percent_used: self
-                        .compaction_service
-                        .percent_used(completion.usage.input_tokens),
-                })
-            }
-            AgentOutput::ApprovalRequired(required) => {
-                // 7.1 Convert the tool approval request into a UI event.
-                let event = AgentEvent::ToolConfirmationRequested {
-                    call_id: required.request.call_id.clone(),
-                    tool_name: required.request.tool_name.clone(),
-                    arguments: required.request.arguments.clone(),
-                    policy: required.request.policy,
-                };
-
-                // 7.2 Store the pending approval so /approve or /deny can resume the run.
-                let mut pending_approvals = self.pending_approvals.lock().await;
-                pending_approvals.insert(input.session_id, *required);
-
-                // 7.3 Build and return the UI output for a paused run.
-                let context_input_tokens = last_usage.map_or(0, |usage| usage.input_tokens);
-
-                Ok(HandleAgentOutput {
-                    events: vec![event],
-                    usage: TokenUsage::default(),
-                    context_input_tokens,
-                    context_window_tokens: self.compaction_service.context_window_tokens(),
-                    context_percent_used: self
-                        .compaction_service
-                        .percent_used(context_input_tokens),
-                })
-            }
-        }
+        Ok(HandleAgentOutput {
+            events: output.events,
+            context_input_tokens: usage.input_tokens,
+            context_window_tokens: self.compaction_service.context_window_tokens(),
+            context_percent_used: self.compaction_service.percent_used(usage.input_tokens),
+            usage,
+        })
     }
 
     pub async fn approve_approval(
         &self,
         session_id: Uuid,
-        tx: mpsc::Sender<AgentProgressEvent>,
+        tx: mpsc::Sender<ChatSessionEvent>,
     ) -> Result<AgentStartTurnOutput, AgentUsecaseError> {
         self.resolve_awaiting_approval(session_id, ToolApprovalDecision::Approved, tx)
             .await
@@ -374,7 +258,7 @@ where
     pub async fn deny_approval(
         &self,
         session_id: Uuid,
-        tx: mpsc::Sender<AgentProgressEvent>,
+        tx: mpsc::Sender<ChatSessionEvent>,
     ) -> Result<AgentStartTurnOutput, AgentUsecaseError> {
         self.resolve_awaiting_approval(session_id, ToolApprovalDecision::Denied, tx)
             .await
@@ -474,13 +358,14 @@ where
         &self,
         session_id: Uuid,
         tool_call: ToolCall,
-        tx: &mpsc::Sender<AgentProgressEvent>,
+        tx: &mpsc::Sender<ChatSessionEvent>,
     ) -> Result<(), AgentUsecaseError> {
         let call_id = tool_call.call_id.clone();
         let tool_name = tool_call.name.clone();
 
         let _ = tx
-            .send(AgentProgressEvent::ToolStarted {
+            .send(ChatSessionEvent::ToolCallStarted {
+                session_id,
                 call_id: call_id.clone(),
                 tool_name: tool_name.clone(),
             })
@@ -493,16 +378,19 @@ where
             Err(err) => tool_call_error_output(call_id.clone(), err.to_string()),
         };
 
-        let success = tool_call_output.status == ToolCallOutputStatus::Success;
+        let output = tool_call_output.output.clone();
+        let status = tool_call_output.status;
 
         self.save_tool_call_output(session_id, tool_call_output)
             .await?;
 
         let _ = tx
-            .send(AgentProgressEvent::ToolFinished {
+            .send(ChatSessionEvent::ToolCallFinished {
+                session_id,
                 call_id,
                 tool_name,
-                success,
+                output,
+                status,
             })
             .await;
 
@@ -539,23 +427,28 @@ where
         session_id: Uuid,
         instruction: String,
         mut input_messages: Vec<Message>,
-        tx: mpsc::Sender<AgentProgressEvent>,
+        tx: mpsc::Sender<ChatSessionEvent>,
     ) -> Result<AgentStartTurnOutput, AgentUsecaseError> {
         let mut events = Vec::new();
 
         for _ in 0..MAX_LLM_STEPS {
-            let _ = tx.send(AgentProgressEvent::LlmStarted).await;
+            let _ = tx.send(ChatSessionEvent::LlmStarted { session_id }).await;
 
             let llm_response = self
                 .agent_service
                 .llm_step(instruction.clone(), input_messages.clone())
                 .await?;
 
-            let _ = tx.send(AgentProgressEvent::LlmFinished).await;
+            let _ = tx.send(ChatSessionEvent::LlmFinished { session_id }).await;
 
             let saved_agent_message = self.save_llm_response(session_id, &llm_response).await?;
 
-            events.extend(assistant_text_events(&llm_response.message));
+            for event in
+                assistant_text_events(session_id, saved_agent_message.id, &llm_response.message)
+            {
+                let _ = tx.send(event.clone()).await;
+                events.push(event);
+            }
 
             let tool_calls = tool_calls_from_message(&llm_response.message);
 
@@ -563,6 +456,10 @@ where
                 self.chat_session_repository
                     .update_status(session_id, ChatSessionStatus::Idle)
                     .await?;
+
+                let event = ChatSessionEvent::AgentTurnCompleted { session_id };
+                let _ = tx.send(event.clone()).await;
+                events.push(event);
 
                 return Ok(AgentStartTurnOutput { events });
             }
@@ -663,17 +560,16 @@ where
         &self,
         session_id: Uuid,
         tool_call: &ToolCall,
-    ) -> Result<(), AgentUsecaseError> {
-        self.save_tool_call_output(
-            session_id,
-            tool_call_error_output(
-                tool_call.call_id.clone(),
-                "tool execution was denied by user",
-            ),
-        )
-        .await?;
+    ) -> Result<ToolCallOutput, AgentUsecaseError> {
+        let output = tool_call_error_output(
+            tool_call.call_id.clone(),
+            "tool execution was denied by user",
+        );
 
-        Ok(())
+        self.save_tool_call_output(session_id, output.clone())
+            .await?;
+
+        Ok(output)
     }
 
     async fn record_tool_approval_from_tool_call(
@@ -699,7 +595,7 @@ where
         &self,
         session_id: Uuid,
         decision: ToolApprovalDecision,
-        tx: mpsc::Sender<AgentProgressEvent>,
+        tx: mpsc::Sender<ChatSessionEvent>,
     ) -> Result<AgentStartTurnOutput, AgentUsecaseError> {
         self.validate_awaiting_approval_session(session_id).await?;
 
@@ -710,14 +606,33 @@ where
             .update_status(session_id, ChatSessionStatus::Running)
             .await?;
 
+        let resolved = ChatSessionEvent::ToolCallApprovalResolved {
+            session_id,
+            call_id: tool_call.call_id.clone(),
+            tool_name: tool_call.name.clone(),
+            decision,
+        };
+        let _ = tx.send(resolved).await;
+
         match decision {
             ToolApprovalDecision::Approved => {
                 self.execute_and_save_tool_call(session_id, tool_call.clone(), &tx)
                     .await?;
             }
             ToolApprovalDecision::Denied => {
-                self.save_denied_tool_call_output(session_id, &tool_call)
+                let output = self
+                    .save_denied_tool_call_output(session_id, &tool_call)
                     .await?;
+
+                let _ = tx
+                    .send(ChatSessionEvent::ToolCallFinished {
+                        session_id,
+                        call_id: tool_call.call_id.clone(),
+                        tool_name: tool_call.name.clone(),
+                        output: output.output,
+                        status: output.status,
+                    })
+                    .await;
             }
         }
 
@@ -775,8 +690,8 @@ where
         session_id: Uuid,
         assistant_message_id: Uuid,
         tool_call: ToolCall,
-        events: &mut Vec<AgentEvent>,
-        tx: &mpsc::Sender<AgentProgressEvent>,
+        events: &mut Vec<ChatSessionEvent>,
+        tx: &mpsc::Sender<ChatSessionEvent>,
     ) -> Result<ToolCallStep, AgentUsecaseError> {
         match self
             .agent_service
@@ -804,12 +719,16 @@ where
                     })
                     .await?;
 
-                events.push(AgentEvent::ToolConfirmationRequested {
+                let event = ChatSessionEvent::ToolCallApprovalRequested {
+                    session_id,
                     call_id: tool_call.call_id,
                     tool_name: tool_call.name,
                     arguments: tool_call.arguments,
                     policy,
-                });
+                };
+
+                let _ = tx.send(event.clone()).await;
+                events.push(event);
 
                 self.chat_session_repository
                     .update_status(session_id, ChatSessionStatus::AwaitingApproval)
@@ -820,23 +739,41 @@ where
                 }))
             }
             Ok(ToolExecutionDecision::Deny) => {
-                self.save_tool_call_output(
-                    session_id,
-                    tool_call_error_output(
-                        tool_call.call_id,
-                        "tool execution was blocked by execution rule",
-                    ),
-                )
-                .await?;
+                let output = tool_call_error_output(
+                    tool_call.call_id.clone(),
+                    "tool execution was blocked by execution rule",
+                );
+
+                self.save_tool_call_output(session_id, output.clone())
+                    .await?;
+
+                let _ = tx
+                    .send(ChatSessionEvent::ToolCallFinished {
+                        session_id,
+                        call_id: tool_call.call_id,
+                        tool_name: tool_call.name,
+                        output: output.output,
+                        status: output.status,
+                    })
+                    .await;
 
                 Ok(ToolCallStep::Continued)
             }
             Err(err) => {
-                self.save_tool_call_output(
-                    session_id,
-                    tool_call_error_output(tool_call.call_id, err.to_string()),
-                )
-                .await?;
+                let output = tool_call_error_output(tool_call.call_id.clone(), err.to_string());
+
+                self.save_tool_call_output(session_id, output.clone())
+                    .await?;
+
+                let _ = tx
+                    .send(ChatSessionEvent::ToolCallFinished {
+                        session_id,
+                        call_id: tool_call.call_id,
+                        tool_name: tool_call.name,
+                        output: output.output,
+                        status: output.status,
+                    })
+                    .await;
 
                 Ok(ToolCallStep::Continued)
             }
@@ -846,7 +783,7 @@ where
     async fn continue_after_tool_output(
         &self,
         session_id: Uuid,
-        tx: mpsc::Sender<AgentProgressEvent>,
+        tx: mpsc::Sender<ChatSessionEvent>,
     ) -> Result<AgentStartTurnOutput, AgentUsecaseError> {
         let mut events = Vec::new();
 
@@ -957,13 +894,21 @@ fn validate_user_message(user_message: &Message) -> Result<(), AgentUsecaseError
     Ok(())
 }
 
-fn assistant_text_events(message: &Message) -> Vec<AgentEvent> {
+fn assistant_text_events(
+    session_id: Uuid,
+    message_id: Uuid,
+    message: &Message,
+) -> Vec<ChatSessionEvent> {
     message
         .content
         .iter()
         .filter_map(|content| match content {
             MessageContent::OutputText { text } if !text.is_empty() => {
-                Some(AgentEvent::AssistantMessage(text.clone()))
+                Some(ChatSessionEvent::AssistantMessageCreated {
+                    session_id,
+                    message_id,
+                    content: text.clone(),
+                })
             }
             _ => None,
         })
