@@ -1,7 +1,7 @@
-pub mod agent_execution_mode;
 pub mod awaiting_tool_approval;
 pub mod chat_message;
 pub mod chat_session;
+pub mod chat_session_event;
 pub mod input_file;
 pub mod input_image;
 pub mod memory_index;

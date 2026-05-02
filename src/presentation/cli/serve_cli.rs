@@ -3,8 +3,8 @@ use std::{env, net::SocketAddr, sync::Arc};
 use crate::application::usecase::agent_usecase::AgentUsecase;
 use crate::domain::service::{
     agent_service::AgentService, compaction_service::CompactionService,
-    instruction_service::InstructionService, memory_index_service::MemoryIndexService,
-    tool_service::ToolService,
+    event_service::EventService, instruction_service::InstructionService,
+    memory_index_service::MemoryIndexService, tool_service::ToolService,
 };
 use crate::infrastructure::embedding::bedrock_embedding_provider::BedrockEmbeddingProvider;
 use crate::infrastructure::llm::bedrock_llm_provider::BedrockLlmProvider;
@@ -22,6 +22,7 @@ use crate::infrastructure::tool::{
     shell_exec_tool::ShellExecTool, text_search_tool::TextSearchTool, web_fetch_tool::WebFetchTool,
     web_search_tool::WebSearchTool,
 };
+use crate::presentation::handler::create_event_handler::create_event_handler;
 use crate::presentation::handler::create_message_handler::create_message_handler;
 use crate::presentation::handler::create_session_handler::create_session_handler;
 use crate::presentation::handler::delete_session_handler::delete_session_handler;
@@ -113,11 +114,13 @@ pub async fn run(addr: SocketAddr) -> Result<(), std::io::Error> {
     let app_state = AppState {
         chat_session_repository,
         chat_message_repository,
+        event_service: Arc::new(EventService::new()),
         agent_usecase,
     };
 
     let api_routes = Router::new()
         .route("/health", get(health_handler))
+        .route("/events", get(create_event_handler))
         .route("/approvals", get(list_approval_handler))
         .route("/approvals/{session_id}", post(resolve_approval_handler))
         .route(
