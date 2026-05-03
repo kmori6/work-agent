@@ -52,11 +52,13 @@ fn to_sse_event(event: ChatSessionEvent) -> Event {
             session_id,
             call_id,
             tool_name,
+            arguments,
         } => Event::default().event("tool_call_started").data(
             json!({
                 "session_id": session_id,
                 "call_id": call_id,
                 "tool_name": tool_name,
+                "arguments": arguments,
             })
             .to_string(),
         ),

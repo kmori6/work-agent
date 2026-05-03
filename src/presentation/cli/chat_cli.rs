@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 const PROMPT: &str = "\x1b[38;2;0;71;171m>\x1b[0m ";
+const MAX_CHARS: usize = 100;
 
 struct ChatApiClient {
     base_url: String,
@@ -137,15 +138,17 @@ pub async fn run(base_url: String, session_id: Option<Uuid>) -> Result<(), Agent
                         println!("unknown command: {line}");
                     }
                     _ => {
+                        // Posting a message only starts the agent turn; output arrives later via SSE.
                         client.post_message(session.id, line).await?;
 
+                        // The event stream is shared by all sessions, so keep only this turn's session.
                         let current_session = session.id.to_string();
 
-                        // WARN: a chunk may contain partial or multiple events
+                        // Network chunks do not necessarily align with SSE event boundaries.
                         'turn: while let Some(chunk) = events.chunk().await? {
                             event_buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-                            // read one event
+                            // SSE events are separated by a blank line.
                             // event: xxx
                             // data: {"yyy": "zzz", ...}
                             while let Some(index) = event_buffer.find("\n\n") {
@@ -169,10 +172,12 @@ pub async fn run(base_url: String, session_id: Option<Uuid>) -> Result<(), Agent
                                     continue;
                                 }
 
+                                // Ignore malformed events and keep-alives that do not contain JSON data.
                                 let Ok(data) = serde_json::from_str::<Value>(&event_data) else {
                                     continue;
                                 };
 
+                                // Ignore events for other sessions on the shared event stream.
                                 if data.get("session_id").and_then(|v| v.as_str())
                                     != Some(current_session.as_str())
                                 {
@@ -192,7 +197,25 @@ pub async fn run(base_url: String, session_id: Option<Uuid>) -> Result<(), Agent
                                             .get("tool_name")
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("tool");
-                                        println!("[tool] {tool_name}");
+                                        println!("[tool call] {tool_name}");
+
+                                        if let Some(arguments) = data.get("arguments") {
+                                            let pretty = serde_json::to_string_pretty(arguments)
+                                                .unwrap_or_else(|_| arguments.to_string());
+
+                                            let arguments = if pretty.chars().count() > MAX_CHARS {
+                                                let truncated = pretty
+                                                    .chars()
+                                                    .take(MAX_CHARS)
+                                                    .collect::<String>();
+
+                                                format!("{truncated}\n... (truncated)")
+                                            } else {
+                                                pretty
+                                            };
+
+                                            println!("[tool call]\n{arguments}");
+                                        }
                                     }
                                     "tool_call_finished" => {
                                         let tool_name = data
@@ -203,7 +226,25 @@ pub async fn run(base_url: String, session_id: Option<Uuid>) -> Result<(), Agent
                                             .get("status")
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("unknown");
-                                        println!("[tool] {tool_name}: {status}");
+                                        println!("[tool call] {tool_name}: {status}");
+
+                                        if let Some(output) = data.get("output") {
+                                            let pretty = serde_json::to_string_pretty(output)
+                                                .unwrap_or_else(|_| output.to_string());
+
+                                            let output = if pretty.chars().count() > MAX_CHARS {
+                                                let truncated = pretty
+                                                    .chars()
+                                                    .take(MAX_CHARS)
+                                                    .collect::<String>();
+
+                                                format!("{truncated}\n... (truncated)")
+                                            } else {
+                                                pretty
+                                            };
+
+                                            println!("[tool call output]\n{output}");
+                                        }
                                     }
                                     "tool_call_approval_requested" => {
                                         let tool_name = data
@@ -215,6 +256,7 @@ pub async fn run(base_url: String, session_id: Option<Uuid>) -> Result<(), Agent
                                         break 'turn;
                                     }
                                     "agent_turn_completed" => {
+                                        // Stop waiting once this turn completes.
                                         break 'turn;
                                     }
                                     "agent_turn_failed" => {
@@ -223,6 +265,7 @@ pub async fn run(base_url: String, session_id: Option<Uuid>) -> Result<(), Agent
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("agent turn failed");
                                         println!("[error] {message}");
+                                        // Return to the prompt after showing the failure.
                                         break 'turn;
                                     }
                                     _ => {}

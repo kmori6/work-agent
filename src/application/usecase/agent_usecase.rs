@@ -344,12 +344,14 @@ where
     ) -> Result<(), AgentUsecaseError> {
         let call_id = tool_call.call_id.clone();
         let tool_name = tool_call.name.clone();
+        let arguments = tool_call.arguments.clone();
 
         let _ = tx
             .send(ChatSessionEvent::ToolCallStarted {
                 session_id,
                 call_id: call_id.clone(),
                 tool_name: tool_name.clone(),
+                arguments: arguments.clone(),
             })
             .await;
 

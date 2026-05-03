@@ -19,6 +19,7 @@ pub enum ChatSessionEvent {
         session_id: Uuid,
         call_id: String,
         tool_name: String,
+        arguments: Value,
     },
     ToolCallFinished {
         session_id: Uuid,
