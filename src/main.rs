@@ -52,9 +52,12 @@ async fn main() -> Result<(), AgentCliError> {
             info!("Starting server on {}", addr);
             serve_cli::run(addr).await?;
         }
-        Commands::Chat => {
+        Commands::Chat {
+            base_url,
+            session_id,
+        } => {
             info!("Starting chat CLI...");
-            chat_cli::run().await?;
+            chat_cli::run(base_url, session_id).await?;
         }
         Commands::Agent => {
             info!("Starting agent...");

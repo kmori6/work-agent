@@ -8,6 +8,7 @@ pub mod survey_cli;
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 #[derive(Parser, Debug)]
 pub struct Cli {
@@ -21,7 +22,13 @@ pub enum Commands {
         #[arg(long, default_value = "0.0.0.0:3000")]
         addr: SocketAddr,
     },
-    Chat,
+    Chat {
+        #[arg(long, default_value = "http://localhost:3000")]
+        base_url: String,
+
+        #[arg(long)]
+        session_id: Option<Uuid>,
+    },
     Agent,
     Research,
     /// Read and summarize an academic paper from a PDF file or URL

@@ -7,16 +7,22 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+#[derive(Debug, Deserialize)]
+pub struct ResolveApprovalRequest {
+    pub decision: ToolApprovalResponse,
+}
+
 pub async fn resolve_approval_handler(
     State(state): State<AppState>,
     Path(session_id): Path<Uuid>,
-    Json(request): Json<ToolApprovalResponse>,
+    Json(request): Json<ResolveApprovalRequest>,
 ) -> Response {
-    let decision = request;
+    let decision = request.decision;
     let decision_text = decision.as_str();
 
     let agent_usecase = state.agent_usecase.clone();

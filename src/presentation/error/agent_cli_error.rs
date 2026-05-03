@@ -2,6 +2,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AgentCliError {
+    #[error("failed to call chat api: {0}")]
+    Http(#[from] reqwest::Error),
+
     #[error("failed to initialize llm provider: {0}")]
     LlmProvider(#[from] crate::domain::error::llm_provider_error::LlmProviderError),
 
