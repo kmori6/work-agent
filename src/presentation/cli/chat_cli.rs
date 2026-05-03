@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 const PROMPT: &str = "\x1b[38;2;0;71;171m❯\x1b[0m ";
 const FILE_ICON: &str = "@";
-const MAX_CHARS: usize = 100;
+const MAX_CHARS: usize = 200;
 
 struct ChatApiClient {
     base_url: String,
@@ -80,18 +80,29 @@ impl ChatApiClient {
         text: &str,
         attached_files: &[PathBuf],
     ) -> Result<(), AgentCliError> {
-        let mut content: Vec<serde_json::Value> = attached_files
-            .iter()
-            .filter_map(|path| load_attachment(path).ok())
-            .filter_map(|attachment| match attachment {
-                Attachment::Image(image) => {
-                    serde_json::to_value(MessageContent::InputImage(image)).ok()
-                }
-                Attachment::File(file) => {
-                    serde_json::to_value(MessageContent::InputFile(file)).ok()
-                }
-            })
-            .collect();
+        let mut content = Vec::<Value>::new();
+
+        for path in attached_files {
+            let attachment = load_attachment(path).map_err(|err| {
+                AgentCliError::Io(std::io::Error::other(format!(
+                    "failed to load attachment {}: {err}",
+                    path.display()
+                )))
+            })?;
+
+            let value = match attachment {
+                Attachment::Image(image) => serde_json::to_value(MessageContent::InputImage(image)),
+                Attachment::File(file) => serde_json::to_value(MessageContent::InputFile(file)),
+            }
+            .map_err(|err| {
+                AgentCliError::Io(std::io::Error::other(format!(
+                    "failed to encode attachment {}: {err}",
+                    path.display()
+                )))
+            })?;
+
+            content.push(value);
+        }
 
         content.insert(
             0,
@@ -111,6 +122,23 @@ impl ChatApiClient {
                     "role": "user",
                     "content": content
                 }
+            }))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        Ok(())
+    }
+
+    async fn resolve_approval(
+        &self,
+        session_id: Uuid,
+        decision: &str,
+    ) -> Result<(), AgentCliError> {
+        self.http
+            .post(format!("{}/v1/approvals/{}", self.base_url, session_id))
+            .json(&json!({
+                "decision": decision
             }))
             .send()
             .await?
@@ -259,7 +287,7 @@ pub async fn run(base_url: String, session_id: Option<Uuid>) -> Result<(), Agent
                             attached_files.clear();
 
                             prompt = format!(
-                                "\n{} | files {}\n{}",
+                                "\n\x1b[90m{} | files {}\x1b[0m\n{}",
                                 session.id,
                                 attached_files.len(),
                                 PROMPT
@@ -280,7 +308,7 @@ pub async fn run(base_url: String, session_id: Option<Uuid>) -> Result<(), Agent
                             let detached = attached_files.remove(index - 1);
 
                             prompt = format!(
-                                "\n{} | files {}\n{}",
+                                "\n\x1b[90m{} | files {}\x1b[0m\n{}",
                                 session.id,
                                 attached_files.len(),
                                 PROMPT
@@ -290,15 +318,24 @@ pub async fn run(base_url: String, session_id: Option<Uuid>) -> Result<(), Agent
                             println!("  {FILE_ICON} {index}  {}", detached.display());
                         }
                     }
+                    "/approve" => {
+                        client.resolve_approval(session.id, "approved").await?;
+                        wait_events(&mut events, &mut event_buffer, session.id).await?;
+                    }
+                    "/deny" => {
+                        client.resolve_approval(session.id, "denied").await?;
+                        wait_events(&mut events, &mut event_buffer, session.id).await?;
+                    }
                     _ if line.starts_with('/') => {
                         println!("unknown command: {line}");
                     }
                     _ => {
                         // Posting a message only starts the agent turn; output arrives later via SSE.
-                        let files_to_send = std::mem::take(&mut attached_files);
                         client
-                            .post_message(session.id, line, &files_to_send)
+                            .post_message(session.id, line, &attached_files)
                             .await?;
+
+                        attached_files.clear();
 
                         // Reconstruct the prompt to show the files still attached for the next message.
                         prompt = format!(
@@ -309,136 +346,7 @@ pub async fn run(base_url: String, session_id: Option<Uuid>) -> Result<(), Agent
                         );
 
                         // The event stream is shared by all sessions, so keep only this turn's session.
-                        let current_session = session.id.to_string();
-
-                        // Network chunks do not necessarily align with SSE event boundaries.
-                        'turn: while let Some(chunk) = events.chunk().await? {
-                            event_buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                            // SSE events are separated by a blank line.
-                            // event: xxx
-                            // data: {"yyy": "zzz", ...}
-                            while let Some(index) = event_buffer.find("\n\n") {
-                                let raw_event = event_buffer[..index].to_string();
-                                event_buffer = event_buffer[index + 2..].to_string();
-
-                                let mut event_name = "";
-                                let mut event_data = String::new();
-
-                                for line in raw_event.lines() {
-                                    let line = line.trim_end_matches('\r');
-
-                                    if let Some(value) = line.strip_prefix("event:") {
-                                        event_name = value.trim();
-                                    } else if let Some(value) = line.strip_prefix("data:") {
-                                        event_data.push_str(value.trim());
-                                    }
-                                }
-
-                                if event_name.is_empty() || event_data.is_empty() {
-                                    continue;
-                                }
-
-                                // Ignore malformed events and keep-alives that do not contain JSON data.
-                                let Ok(data) = serde_json::from_str::<Value>(&event_data) else {
-                                    continue;
-                                };
-
-                                // Ignore events for other sessions on the shared event stream.
-                                if data.get("session_id").and_then(|v| v.as_str())
-                                    != Some(current_session.as_str())
-                                {
-                                    continue;
-                                }
-
-                                match event_name {
-                                    "assistant_message_created" => {
-                                        if let Some(content) =
-                                            data.get("content").and_then(|v| v.as_str())
-                                        {
-                                            println!("{content}");
-                                        }
-                                    }
-                                    "tool_call_started" => {
-                                        let tool_name = data
-                                            .get("tool_name")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("tool");
-                                        println!("[tool call] {tool_name}");
-
-                                        if let Some(arguments) = data.get("arguments") {
-                                            let pretty = serde_json::to_string_pretty(arguments)
-                                                .unwrap_or_else(|_| arguments.to_string());
-
-                                            let arguments = if pretty.chars().count() > MAX_CHARS {
-                                                let truncated = pretty
-                                                    .chars()
-                                                    .take(MAX_CHARS)
-                                                    .collect::<String>();
-
-                                                format!("{truncated}\n... (truncated)")
-                                            } else {
-                                                pretty
-                                            };
-
-                                            println!("[tool call]\n{arguments}");
-                                        }
-                                    }
-                                    "tool_call_finished" => {
-                                        let tool_name = data
-                                            .get("tool_name")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("tool");
-                                        let status = data
-                                            .get("status")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("unknown");
-                                        println!("[tool call] {tool_name}: {status}");
-
-                                        if let Some(output) = data.get("output") {
-                                            let pretty = serde_json::to_string_pretty(output)
-                                                .unwrap_or_else(|_| output.to_string());
-
-                                            let output = if pretty.chars().count() > MAX_CHARS {
-                                                let truncated = pretty
-                                                    .chars()
-                                                    .take(MAX_CHARS)
-                                                    .collect::<String>();
-
-                                                format!("{truncated}\n... (truncated)")
-                                            } else {
-                                                pretty
-                                            };
-
-                                            println!("[tool call output]\n{output}");
-                                        }
-                                    }
-                                    "tool_call_approval_requested" => {
-                                        let tool_name = data
-                                            .get("tool_name")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("tool");
-                                        println!("[approval requested] {tool_name}");
-                                        println!("Run /approve or /deny.");
-                                        break 'turn;
-                                    }
-                                    "agent_turn_completed" => {
-                                        // Stop waiting once this turn completes.
-                                        break 'turn;
-                                    }
-                                    "agent_turn_failed" => {
-                                        let message = data
-                                            .get("message")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("agent turn failed");
-                                        println!("[error] {message}");
-                                        // Return to the prompt after showing the failure.
-                                        break 'turn;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
+                        wait_events(&mut events, &mut event_buffer, session.id).await?;
                     }
                 }
             }
@@ -453,6 +361,129 @@ pub async fn run(base_url: String, session_id: Option<Uuid>) -> Result<(), Agent
             }
             Err(e) => {
                 return Err(AgentCliError::Readline(e.to_string()));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn wait_events(
+    events: &mut reqwest::Response,
+    event_buffer: &mut String,
+    session_id: Uuid,
+) -> Result<(), AgentCliError> {
+    let current_session = session_id.to_string();
+
+    'turn: while let Some(chunk) = events.chunk().await? {
+        event_buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some(index) = event_buffer.find("\n\n") {
+            let raw_event = event_buffer[..index].to_string();
+            *event_buffer = event_buffer[index + 2..].to_string();
+
+            let mut event_name = "";
+            let mut event_data = String::new();
+
+            for line in raw_event.lines() {
+                let line = line.trim_end_matches('\r');
+
+                if let Some(value) = line.strip_prefix("event:") {
+                    event_name = value.trim();
+                } else if let Some(value) = line.strip_prefix("data:") {
+                    event_data.push_str(value.trim());
+                }
+            }
+
+            if event_name.is_empty() || event_data.is_empty() {
+                continue;
+            }
+
+            let Ok(data) = serde_json::from_str::<Value>(&event_data) else {
+                continue;
+            };
+
+            if data.get("session_id").and_then(|v| v.as_str()) != Some(current_session.as_str()) {
+                continue;
+            }
+
+            match event_name {
+                "assistant_message_created" => {
+                    if let Some(content) = data.get("content").and_then(|v| v.as_str()) {
+                        println!("{content}");
+                    }
+                }
+                "tool_call_started" => {
+                    let tool_name = data
+                        .get("tool_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("tool");
+                    println!("[tool call] {tool_name}");
+
+                    if let Some(arguments) = data.get("arguments") {
+                        let pretty = serde_json::to_string_pretty(arguments)
+                            .unwrap_or_else(|_| arguments.to_string());
+
+                        let arguments = if pretty.chars().count() > MAX_CHARS {
+                            let truncated = pretty.chars().take(MAX_CHARS).collect::<String>();
+
+                            format!("{truncated}\n... (truncated)")
+                        } else {
+                            pretty
+                        };
+
+                        println!("[tool call]\n{arguments}");
+                    }
+                }
+                "tool_call_finished" => {
+                    let tool_name = data
+                        .get("tool_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("tool");
+                    let status = data
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    println!("[tool call] {tool_name}: {status}");
+
+                    if let Some(output) = data.get("output") {
+                        let pretty = serde_json::to_string_pretty(output)
+                            .unwrap_or_else(|_| output.to_string());
+
+                        let output = if pretty.chars().count() > MAX_CHARS {
+                            let truncated = pretty.chars().take(MAX_CHARS).collect::<String>();
+
+                            format!("{truncated}\n... (truncated)")
+                        } else {
+                            pretty
+                        };
+
+                        println!("[tool call output]\n{output}");
+                    }
+                }
+                "tool_call_approval_requested" => {
+                    let tool_name = data
+                        .get("tool_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("tool");
+                    println!("[approval requested] {tool_name}");
+                    println!("Run /approve or /deny.");
+                    break 'turn;
+                }
+                "agent_turn_completed" => {
+                    // Stop waiting once this turn completes.
+                    break 'turn;
+                }
+                "agent_turn_failed" => {
+                    let message = data
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("agent turn failed");
+                    println!("[error] {message}");
+                    // Return to the prompt after showing the failure.
+                    break 'turn;
+                }
+                _ => {}
             }
         }
     }
