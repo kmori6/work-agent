@@ -1,5 +1,8 @@
+use crate::application::usecase::agent_usecase::Attachment;
 use crate::domain::model::chat_session::ChatSession;
+use crate::domain::model::message::MessageContent;
 use crate::presentation::error::agent_cli_error::AgentCliError;
+use crate::presentation::util::attachment::load_attachment;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use serde_json::{Value, json};
@@ -71,7 +74,33 @@ impl ChatApiClient {
         Ok(response)
     }
 
-    async fn post_message(&self, session_id: Uuid, text: &str) -> Result<(), AgentCliError> {
+    async fn post_message(
+        &self,
+        session_id: Uuid,
+        text: &str,
+        attached_files: &[PathBuf],
+    ) -> Result<(), AgentCliError> {
+        let mut content: Vec<serde_json::Value> = attached_files
+            .iter()
+            .filter_map(|path| load_attachment(path).ok())
+            .filter_map(|attachment| match attachment {
+                Attachment::Image(image) => {
+                    serde_json::to_value(MessageContent::InputImage(image)).ok()
+                }
+                Attachment::File(file) => {
+                    serde_json::to_value(MessageContent::InputFile(file)).ok()
+                }
+            })
+            .collect();
+
+        content.insert(
+            0,
+            json!({
+                "type": "input_text",
+                "text": text
+            }),
+        );
+
         self.http
             .post(format!(
                 "{}/v1/sessions/{}/messages",
@@ -80,12 +109,7 @@ impl ChatApiClient {
             .json(&json!({
                 "user_message": {
                     "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": text
-                        }
-                    ]
+                    "content": content
                 }
             }))
             .send()
@@ -271,7 +295,18 @@ pub async fn run(base_url: String, session_id: Option<Uuid>) -> Result<(), Agent
                     }
                     _ => {
                         // Posting a message only starts the agent turn; output arrives later via SSE.
-                        client.post_message(session.id, line).await?;
+                        let files_to_send = std::mem::take(&mut attached_files);
+                        client
+                            .post_message(session.id, line, &files_to_send)
+                            .await?;
+
+                        // Reconstruct the prompt to show the files still attached for the next message.
+                        prompt = format!(
+                            "\n\x1b[90m{} | files {}\x1b[0m\n{}",
+                            session.id,
+                            attached_files.len(),
+                            PROMPT
+                        );
 
                         // The event stream is shared by all sessions, so keep only this turn's session.
                         let current_session = session.id.to_string();
